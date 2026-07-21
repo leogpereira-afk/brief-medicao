@@ -407,7 +407,19 @@ const STORE = (() => {
       const pendingIds = new Set(
         queue.filter(q => q.action === 'upsert' && q.os && q.os.id).map(q => q.os.id)
       );
-      const sobreviventes = local.filter(o => remoteIds.has(o.id) || pendingIds.has(o.id));
+      // Carência de consistência eventual: a LISTAGEM do Blobs demora ~1 min para
+      // refletir um registro recém-gravado (o get por chave é imediato). Sem esta
+      // folga, um brief criado e já sincronizado (fora da fila) sumiria da tela do
+      // vendedor por até um minuto, porque ainda não aparece na listagem. Registros
+      // tocados nos últimos GRACA_MS ficam protegidos; algo apagado de verdade em
+      // outro aparelho some no ciclo seguinte, passada a carência.
+      const GRACA_MS = 3 * 60 * 1000;
+      const agoraMs = Date.now();
+      const recente = o => {
+        const t = o.atualizadoEm || o.criadoEm;
+        return t && (agoraMs - new Date(t).getTime()) < GRACA_MS;
+      };
+      const sobreviventes = local.filter(o => remoteIds.has(o.id) || pendingIds.has(o.id) || recente(o));
       if (sobreviventes.length !== local.length) {
         changed = true;
         local.length = 0;
