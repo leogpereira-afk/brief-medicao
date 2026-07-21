@@ -86,6 +86,7 @@ const PDF = (() => {
   }
 
   function tituloSecao(doc, c, texto) {
+    c.y += 12; // respiro sobre o bloco anterior (senão a faixa cobre a última linha)
     c.garantir(40);
     doc.setFillColor(...INDIGO_CLARO);
     doc.roundedRect(M, c.y - 13, LARG, 24, 5, 5, 'F');
@@ -452,13 +453,13 @@ const PDF = (() => {
     y = yGridFim + 16;
     xc = M;
     doc.setFont('Poppins'); doc.setFontSize(7.4); doc.setTextColor(...TINTA);
-    doc.text('Arte em alta:', xc, y); xc += 46;
+    doc.text('Arte em alta:', xc, y); xc += 52;
     xc = caixinha('Sim', xc, b && o.arteAlta === 'Sim');
     xc = caixinha('Não', xc, b && o.arteAlta === 'Não');
-    doc.text('Projeto 3D:', xc, y); xc += 42;
+    doc.text('Projeto 3D:', xc, y); xc += 47;
     xc = caixinha('Sim', xc, b && o.projeto3D === 'Sim');
     xc = caixinha('Não', xc, b && o.projeto3D === 'Não');
-    doc.text('Budget:', xc, y); xc += 30;
+    doc.text('Budget:', xc, y); xc += 34;
     ['até 1 mil', '1 a 5 mil', '5 a 10 mil', '+10 mil'].forEach((fx, i) => {
       const marcado = b && o.budget && ['Até R$1.000', 'R$1.000 a R$5.000', 'R$5.000 a R$10.000', 'Acima de R$10.000'][i] === o.budget;
       xc = caixinha(fx, xc, marcado);
