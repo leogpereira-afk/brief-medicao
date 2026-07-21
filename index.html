@@ -2,55 +2,21 @@
 <html lang="pt-BR">
 <head>
   <meta charset="utf-8">
-  <meta name="viewport" content="width=device-width, initial-scale=1">
-  <title>Teste do kit de sincronização</title>
-  <style>
-    body { font-family: -apple-system, Segoe UI, Arial, sans-serif; max-width: 640px; margin: 40px auto; padding: 0 16px; color: #0f172a; }
-    h1 { font-size: 1.2rem; }
-    button { padding: 8px 14px; margin: 4px 6px 4px 0; border: 1px solid #e2e8f0; border-radius: 8px; background: #1877f2; color: #fff; font-weight: 600; cursor: pointer; }
-    button.ghost { background: #fff; color: #0f172a; }
-    pre { background: #f1f5f9; border: 1px solid #e2e8f0; border-radius: 8px; padding: 12px; font-size: .8rem; white-space: pre-wrap; }
-    #sync { font-weight: 700; }
-  </style>
+  <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+  <meta name="theme-color" content="#3840E8">
+  <meta name="apple-mobile-web-app-capable" content="yes">
+  <meta name="apple-mobile-web-app-status-bar-style" content="default">
+  <title>Brief de Medição · Impresilk</title>
+  <link rel="manifest" href="manifest.webmanifest">
+  <link rel="icon" type="image/png" sizes="192x192" href="icons/icon-192.png">
+  <link rel="apple-touch-icon" href="icons/apple-touch-icon.png">
+  <link rel="stylesheet" href="styles.css">
 </head>
 <body>
-  <h1>🔌 Teste do kit de sincronização (apague esta página ao construir o app real)</h1>
-  <p>Status da fila: <span id="sync">—</span></p>
-  <p>
-    <button id="criar">+ Criar registro de teste</button>
-    <button id="listar" class="ghost">Listar local</button>
-    <button id="pull" class="ghost">⟳ Pull do servidor</button>
-    <button id="saude" class="ghost">🩺 Saúde</button>
-  </p>
-  <pre id="out">Clique num botão…</pre>
-
+  <div id="app"></div>
+  <div id="overlays"></div>
   <script src="config.js"></script>
   <script src="store.js"></script>
-  <script>
-    const out = document.getElementById('out');
-    const mostrar = v => out.textContent = typeof v === 'string' ? v : JSON.stringify(v, null, 2);
-
-    STORE.onSync((status, pendentes) => {
-      document.getElementById('sync').textContent =
-        status === 'ok' ? '✅ Sincronizado' :
-        status === 'pending' ? `⏳ ${pendentes} pendente(s)` : '⚠️ Offline';
-    });
-
-    document.getElementById('criar').onclick = () => {
-      const reg = {
-        id: STORE.uuid(), numero: 'TESTE-' + Date.now(),
-        criadoEm: new Date().toISOString(), criadoPor: 'demo',
-        atualizadoEm: new Date().toISOString(), atualizadoPor: 'demo'
-      };
-      STORE.saveOS(reg);
-      mostrar('Criado e enfileirado: ' + reg.numero + '\n(o trySync envia sozinho; veja o status acima)');
-    };
-    document.getElementById('listar').onclick = () => mostrar(STORE.getAllOS());
-    document.getElementById('pull').onclick = async () => mostrar(await STORE.pull() || 'pull ok');
-    document.getElementById('saude').onclick = async () => mostrar(await STORE.api({ action: 'saude' }).catch(e => 'ERRO: ' + e.message));
-
-    STORE.trySync();
-    if ('serviceWorker' in navigator) navigator.serviceWorker.register('sw.js');
-  </script>
+  <script src="app.js"></script>
 </body>
 </html>

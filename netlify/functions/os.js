@@ -188,7 +188,9 @@ exports.handler = async (event, context) => {
           await registrarLog({ quem, acao: 'enviou pro design', briefingId: toSave.id, cliente: toSave.cliente || '' });
         } else if (existing.status !== toSave.status && toSave.status) {
           await registrarLog({ quem, acao: 'mudou status: ' + (existing.status || 'sem status') + ' para ' + toSave.status, briefingId: toSave.id, cliente: toSave.cliente || '' });
-        } else {
+        } else if (existing.situacao === 'enviado') {
+          // Rascunho salva sozinho a cada campo; logar cada autosave viraria ruído.
+          // Só edição de briefing JÁ ENVIADO entra no log.
           await registrarLog({ quem, acao: 'editou o briefing', briefingId: toSave.id, cliente: toSave.cliente || '' });
         }
 

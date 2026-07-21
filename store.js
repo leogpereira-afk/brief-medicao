@@ -101,9 +101,9 @@ const STORE = (() => {
     trySync();
   }
 
-  function deleteOS(id) {
+  function deleteOS(id, quem) {
     _setAllOS(getAllOS().filter(o => o.id !== id));
-    _enqueue({ action: 'delete', id });
+    _enqueue({ action: 'delete', id, _quem: quem || '' });
     trySync();
   }
 
@@ -135,9 +135,9 @@ const STORE = (() => {
     return Object.assign({}, CFG_DEFAULT, lsGet(K.CFG, {}));
   }
 
-  function saveCFG(cfg) {
+  function saveCFG(cfg, quem) {
     lsSet(K.CFG, cfg);
-    _enqueue({ action: 'setCfg', cfg });
+    _enqueue({ action: 'setCfg', cfg, _quem: quem || '' });
     trySync();
   }
 

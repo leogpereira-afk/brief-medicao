@@ -1,0 +1,1859 @@
+// app.js — Brief de Medição · Impresilk
+// App inteiro em cima do STORE (kit de sincronização offline-first).
+// Perfis: vendedor (cria e vê os próprios), designer (recebe, muda status,
+// exporta), admin (tudo + painel de controle).
+
+/* ══════════════════ Constantes ══════════════════ */
+
+const STATUS_LISTA = ['Aguardando orçamento', 'Em design', 'Aprovado pra execução', 'Concluído'];
+const OBSTACULOS = ['Árvore', 'Poste', 'Marquise', 'Fiação', 'Outro'];
+const SERVICOS_EXTRAS = [
+  'Remoção de adesivo com removedor', 'Remoção de fachada', 'Remoção de letras da parede',
+  'Pintura', 'Lixamento', 'Serviços de solda', 'Troca de lâmpadas', 'Serviço elétrico',
+  'Serviço de munk', 'Serviço de terceirizados', 'Cantoneiras', 'Spot', 'Refletor', 'Telhado', 'Calha'
+];
+const COMO_CONHECEU = ['Google', 'Instagram', 'Facebook', 'Indicação', 'Em instalação', 'Carro', 'Já é cliente', 'Outro'];
+const BUDGETS = ['Até R$1.000', 'R$1.000 a R$5.000', 'R$5.000 a R$10.000', 'Acima de R$10.000'];
+const PAGAMENTOS = ['À vista', 'Cartão de crédito', 'Boleto ou prazo', 'A combinar'];
+const FOTOS_ITEM = [
+  { tipo: 'fachada', rotulo: 'Geral da fachada', obrig: true },
+  { tipo: 'close', rotulo: 'Close da superfície', obrig: true },
+  { tipo: 'escala', rotulo: 'Referência de escala', obrig: true },
+  { tipo: 'atual', rotulo: 'Peça atual (se substituição)', obrig: false }
+];
+
+/* ══════════════════ Helpers ══════════════════ */
+
+const $ = (sel, raiz) => (raiz || document).querySelector(sel);
+const $$ = (sel, raiz) => Array.from((raiz || document).querySelectorAll(sel));
+
+function esc(s) {
+  return String(s == null ? '' : s)
+    .replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;')
+    .replace(/"/g, '&quot;').replace(/'/g, '&#39;');
+}
+
+function norm(s) {
+  return String(s || '').toLowerCase().normalize('NFD').replace(/[̀-ͯ]/g, '');
+}
+
+function pad2(n) { return String(n).padStart(2, '0'); }
+
+// Regra do kit: timestamps em UTC, exibição e filtros SEMPRE no dia local.
+function diaLocal(iso) {
+  if (!iso) return '';
+  const d = new Date(iso);
+  return d.getFullYear() + '-' + pad2(d.getMonth() + 1) + '-' + pad2(d.getDate());
+}
+function fmtData(iso) {
+  if (!iso) return '';
+  const d = new Date(iso);
+  return pad2(d.getDate()) + '/' + pad2(d.getMonth() + 1) + '/' + d.getFullYear();
+}
+function fmtDataHora(iso) {
+  if (!iso) return '';
+  const d = new Date(iso);
+  return fmtData(iso) + ' ' + pad2(d.getHours()) + ':' + pad2(d.getMinutes());
+}
+function isoParaInputLocal(iso) {
+  const d = iso ? new Date(iso) : new Date();
+  return d.getFullYear() + '-' + pad2(d.getMonth() + 1) + '-' + pad2(d.getDate()) + 'T' + pad2(d.getHours()) + ':' + pad2(d.getMinutes());
+}
+function inputLocalParaISO(v) {
+  const d = v ? new Date(v) : new Date();
+  return isNaN(d.getTime()) ? new Date().toISOString() : d.toISOString();
+}
+
+function fmtBytes(b) {
+  b = Number(b) || 0;
+  if (b < 1024) return b + ' B';
+  if (b < 1024 * 1024) return (b / 1024).toFixed(0) + ' KB';
+  if (b < 1024 * 1024 * 1024) return (b / (1024 * 1024)).toFixed(1) + ' MB';
+  return (b / (1024 * 1024 * 1024)).toFixed(2) + ' GB';
+}
+
+function numBr(v) {
+  const n = Number(String(v == null ? '' : v).replace(',', '.'));
+  return isFinite(n) ? n : 0;
+}
+function fmtM2(cm2) {
+  return (cm2 / 10000).toLocaleString('pt-BR', { minimumFractionDigits: 2, maximumFractionDigits: 2 }) + ' m²';
+}
+function areaPar(p) { return numBr(p.largura) * numBr(p.altura); }
+function areaItem(item) { return (item.medidas || []).reduce((s, p) => s + areaPar(p), 0); }
+function temMedida(item) { return (item.medidas || []).some(p => numBr(p.largura) > 0 && numBr(p.altura) > 0); }
+
+function mascaraTel(v) {
+  let d = String(v || '').replace(/\D/g, '');
+  if (d.length > 11 && d.startsWith('55')) d = d.slice(2);
+  d = d.slice(0, 11);
+  if (!d.length) return '';
+  if (d.length <= 2) return '(' + d;
+  if (d.length <= 6) return '(' + d.slice(0, 2) + ') ' + d.slice(2);
+  if (d.length <= 10) return '(' + d.slice(0, 2) + ') ' + d.slice(2, 6) + '-' + d.slice(6);
+  return '(' + d.slice(0, 2) + ') ' + d.slice(2, 7) + '-' + d.slice(7);
+}
+
+function nomeItem(item) {
+  if (!item) return '';
+  if (item.tipo === 'Outro') return item.tipoOutro || 'Outro';
+  return item.tipo || '';
+}
+
+function badgeStatus(status) {
+  const mapa = {
+    'Aguardando orçamento': 'status-aguardando',
+    'Em design': 'status-design',
+    'Aprovado pra execução': 'status-execucao',
+    'Concluído': 'status-concluido'
+  };
+  if (!status) return '';
+  return '<span class="badge ' + (mapa[status] || 'neutro') + '">' + esc(status) + '</span>';
+}
+
+function arquivoSeguro(s) {
+  return norm(s).replace(/[^a-z0-9]+/g, '-').replace(/^-+|-+$/g, '').slice(0, 40) || 'briefing';
+}
+
+function debounce(fn, ms) {
+  let t;
+  return function (...args) { clearTimeout(t); t = setTimeout(() => fn.apply(this, args), ms); };
+}
+
+/* ══════════════════ Toast / Modal / Lightbox ══════════════════ */
+
+function toast(msg, tipo) {
+  let area = $('#toasts');
+  if (!area) { area = document.createElement('div'); area.id = 'toasts'; document.body.appendChild(area); }
+  const t = document.createElement('div');
+  t.className = 'toast' + (tipo ? ' ' + tipo : '');
+  t.textContent = msg;
+  area.appendChild(t);
+  setTimeout(() => { t.style.opacity = '0'; t.style.transition = 'opacity .4s'; }, 3400);
+  setTimeout(() => t.remove(), 3900);
+}
+
+function abrirModal(html) {
+  const fundo = document.createElement('div');
+  fundo.className = 'modal-fundo';
+  fundo.innerHTML = '<div class="modal">' + html + '</div>';
+  fundo.addEventListener('click', e => { if (e.target === fundo) fundo.remove(); });
+  $('#overlays').appendChild(fundo);
+  return fundo;
+}
+
+function abrirLightbox(fotos, inicio) {
+  // fotos: [{id, legenda}]
+  let idx = inicio || 0;
+  const lb = document.createElement('div');
+  lb.className = 'lightbox';
+  lb.innerHTML =
+    '<button class="fechar">✕</button>' +
+    '<img alt="Foto ampliada">' +
+    '<div class="legenda"></div>' +
+    (fotos.length > 1 ? '<div class="navegar"><button class="ant">←</button><button class="prox">→</button></div>' : '');
+  const img = $('img', lb);
+  const leg = $('.legenda', lb);
+  async function mostrar() {
+    const f = fotos[idx];
+    leg.textContent = (f.legenda || '') + '  (' + (idx + 1) + ' de ' + fotos.length + ')';
+    img.src = '';
+    const b64 = await STORE.pullPhoto(f.id);
+    if (b64) img.src = b64; else leg.textContent = 'Foto ainda não sincronizada neste aparelho';
+  }
+  $('.fechar', lb).onclick = () => lb.remove();
+  lb.addEventListener('click', e => { if (e.target === lb) lb.remove(); });
+  if (fotos.length > 1) {
+    $('.ant', lb).onclick = () => { idx = (idx - 1 + fotos.length) % fotos.length; mostrar(); };
+    $('.prox', lb).onclick = () => { idx = (idx + 1) % fotos.length; mostrar(); };
+  }
+  $('#overlays').appendChild(lb);
+  mostrar();
+}
+
+function confirmar(titulo, texto, rotuloOk, aoConfirmar, perigo) {
+  const m = abrirModal(
+    '<h3>' + esc(titulo) + '</h3><p>' + texto + '</p>' +
+    '<div class="acoes-modal">' +
+    '<button class="botao fantasma btn-cancelar">Cancelar</button>' +
+    '<button class="botao ' + (perigo ? 'perigo' : '') + ' btn-ok">' + esc(rotuloOk) + '</button>' +
+    '</div>'
+  );
+  $('.btn-cancelar', m).onclick = () => m.remove();
+  $('.btn-ok', m).onclick = () => { m.remove(); aoConfirmar(); };
+}
+
+/* ══════════════════ Manual embutido ══════════════════ */
+
+function abrirManual(aba) {
+  const medir = [
+    'Usar sempre o mesmo ponto de referência, por exemplo o canto inferior esquerdo.',
+    'Altura de instalação é do chão até a base da peça.',
+    'Anotar sempre em centímetros.',
+    'Superfície irregular: registrar mais de um ponto de medição.',
+    'Conferir duas vezes antes de enviar, principalmente em execução.'
+  ];
+  const fotografar = [
+    'Geral da fachada, de frente.',
+    'Close da superfície exata onde a peça vai ser instalada.',
+    'Foto com referência de escala, como uma porta ou tomada.',
+    'Evitar foto contra a luz.',
+    'Se for substituição, fotografar a peça atual.'
+  ];
+  function lista(passos) {
+    return '<ol style="margin-left:20px; display:grid; gap:8px;">' + passos.map(p => '<li>' + esc(p) + '</li>').join('') + '</ol>';
+  }
+  const m = abrirModal(
+    '<h3>Manual rápido</h3>' +
+    '<div class="abas" style="margin-top:10px">' +
+    '<button class="aba aba-medir">Como medir</button>' +
+    '<button class="aba aba-foto">Como fotografar</button></div>' +
+    '<div class="conteudo-manual"></div>' +
+    '<div class="acoes-modal"><button class="botao btn-fechar largo">Entendi</button></div>'
+  );
+  function mostrar(qual) {
+    $('.aba-medir', m).classList.toggle('ativa', qual === 'medir');
+    $('.aba-foto', m).classList.toggle('ativa', qual !== 'medir');
+    $('.conteudo-manual', m).innerHTML = lista(qual === 'medir' ? medir : fotografar);
+  }
+  $('.aba-medir', m).onclick = () => mostrar('medir');
+  $('.aba-foto', m).onclick = () => mostrar('foto');
+  $('.btn-fechar', m).onclick = () => m.remove();
+  mostrar(aba === 'foto' ? 'foto' : 'medir');
+}
+
+/* ══════════════════ Sessão e boot ══════════════════ */
+
+let SESSAO = STORE.getUser();
+let ROTA = { nome: 'lista' };
+let BRIEF = null;         // briefing aberto no editor
+let ETAPA = 1;            // etapa ativa no wizard (mobile)
+let FILTROS = { texto: '', os: '', de: '', ate: '', status: '', vendedor: '', tipo: '', semOS: false };
+let SYNC_ESTADO = { status: 'ok', pendentes: 0 };
+
+function ehDesktop() { return window.matchMedia('(min-width: 900px)').matches; }
+
+STORE.onSync((status, pendentes) => {
+  SYNC_ESTADO = { status, pendentes };
+  const chip = $('#chip-sync');
+  if (chip) {
+    chip.className = 'chip-sync ' + status;
+    chip.textContent = status === 'ok' ? 'Sincronizado' : status === 'pending' ? pendentes + ' pendente(s)' : 'Offline';
+  }
+});
+
+STORE.onConflict((local, servidor) => {
+  const m = abrirModal(
+    '<h3>Alterado em outro aparelho</h3>' +
+    '<p>O briefing de <b>' + esc((local && local.cliente) || 'cliente') + '</b> foi alterado em outro aparelho enquanto você editava aqui. Qual versão vale?</p>' +
+    '<div class="acoes-modal">' +
+    '<button class="botao fantasma btn-serv">Usar a do outro aparelho</button>' +
+    '<button class="botao btn-minha">Manter a minha</button></div>'
+  );
+  $('.btn-serv', m).onclick = () => {
+    STORE.aceitarServidor(servidor);
+    if (BRIEF && BRIEF.id === servidor.id) BRIEF = STORE.getOS(servidor.id);
+    m.remove(); renderApp(); toast('Versão do outro aparelho aplicada');
+  };
+  $('.btn-minha', m).onclick = () => {
+    STORE.sobrescreverServidor(local);
+    m.remove(); toast('Sua versão foi mantida e reenviada');
+  };
+});
+
+STORE.on('quota', () => toast('Memória do aparelho cheia. Sincronize e limpe briefings antigos.', 'erro'));
+STORE.on('item-descartado', () => toast('Um item não conseguiu sincronizar e foi descartado. Confira os dados.', 'erro'));
+
+window.addEventListener('hashchange', () => { lerRota(); renderApp(); });
+
+async function boot() {
+  if ('serviceWorker' in navigator) { try { navigator.serviceWorker.register('sw.js'); } catch {} }
+  lerRota();
+  renderApp();
+  await STORE.pullCFG();
+  await STORE.pull(() => renderApp());
+  STORE.trySync();
+  // Re-render depois do primeiro pull (listas e cfg fresquinhas)
+  renderApp();
+  setInterval(() => { STORE.pull(() => { if (ROTA.nome === 'lista' || ROTA.nome === 'detalhe') renderApp(); }); }, 60000);
+}
+
+function lerRota() {
+  const h = location.hash.replace(/^#\/?/, '');
+  const partes = h.split('/');
+  if (!SESSAO && h !== 'login') { ROTA = { nome: 'login' }; return; }
+  if (h === '' || h === 'lista') ROTA = { nome: 'lista' };
+  else if (h === 'login') ROTA = { nome: 'login' };
+  else if (h === 'novo') ROTA = { nome: 'novo' };
+  else if (partes[0] === 'editar') ROTA = { nome: 'editor', id: partes[1] };
+  else if (partes[0] === 'b') ROTA = { nome: 'detalhe', id: partes[1] };
+  else if (partes[0] === 'admin') ROTA = { nome: 'admin', aba: partes[1] || 'usuarios' };
+  else ROTA = { nome: 'lista' };
+}
+
+/* ══════════════════ Layout base ══════════════════ */
+
+function podeCriar() { return SESSAO && (SESSAO.papel === 'vendedor' || SESSAO.papel === 'admin'); }
+
+function htmlTopo(tituloTela) {
+  const chip = SYNC_ESTADO.status;
+  return (
+    '<header class="topo">' +
+    '<div class="marca">' +
+    '<img src="logo-impresilk.png" alt="Impresilk">' +
+    '<div><div class="titulo">' + esc(tituloTela || 'Brief de Medição') + '</div>' +
+    '<div class="sub">Impresilk · ' + esc(SESSAO ? SESSAO.nome : '') + '</div></div>' +
+    '</div>' +
+    '<nav class="nav-desktop">' +
+    '<a href="#/" class="' + (ROTA.nome === 'lista' ? 'ativo' : '') + '">Briefings</a>' +
+    (podeCriar() ? '<a href="#/novo">+ Novo</a>' : '') +
+    (SESSAO && SESSAO.papel === 'admin' ? '<a href="#/admin" class="' + (ROTA.nome === 'admin' ? 'ativo' : '') + '">Painel de controle</a>' : '') +
+    '<a href="#" id="link-sair-desktop">Sair</a>' +
+    '</nav>' +
+    '<span id="chip-sync" class="chip-sync ' + chip + '">' +
+    (chip === 'ok' ? 'Sincronizado' : chip === 'pending' ? SYNC_ESTADO.pendentes + ' pendente(s)' : 'Offline') + '</span>' +
+    '<button class="botao-menu" id="botao-menu" aria-label="Menu">☰</button>' +
+    '</header>'
+  );
+}
+
+function ligarTopo() {
+  const b = $('#botao-menu');
+  if (b) b.onclick = abrirMenu;
+  const sair = $('#link-sair-desktop');
+  if (sair) sair.onclick = e => { e.preventDefault(); sairDaConta(); };
+}
+
+function abrirMenu() {
+  const fundo = document.createElement('div');
+  fundo.className = 'menu-fundo';
+  fundo.onclick = () => { fundo.remove(); sheet.remove(); };
+  const sheet = document.createElement('div');
+  sheet.className = 'menu-sheet';
+  sheet.innerHTML =
+    '<div class="quem">' + esc(SESSAO.nome) + '</div>' +
+    '<div class="papel">Perfil: ' + esc(SESSAO.papel) + '</div>' +
+    '<a href="#/">📋 Briefings</a>' +
+    (podeCriar() ? '<a href="#/novo">➕ Novo briefing</a>' : '') +
+    (SESSAO.papel === 'admin' ? '<a href="#/admin">🛠 Painel de controle</a>' : '') +
+    '<button class="item" id="menu-ficha">🖨 Ficha de visita em branco (PDF)</button>' +
+    '<button class="item" id="menu-manual">❓ Manual de medição e fotos</button>' +
+    '<button class="item" id="menu-sync">🔄 Sincronizar agora</button>' +
+    '<button class="item" id="menu-sair">🚪 Sair da conta</button>';
+  document.body.appendChild(fundo);
+  document.body.appendChild(sheet);
+  const fechar = () => { fundo.remove(); sheet.remove(); };
+  $$('a', sheet).forEach(a => a.addEventListener('click', fechar));
+  $('#menu-manual', sheet).onclick = () => { fechar(); abrirManual(); };
+  $('#menu-ficha', sheet).onclick = () => { fechar(); exportarFichaVisita(null); };
+  $('#menu-sync', sheet).onclick = async () => { fechar(); toast('Sincronizando…'); await STORE.pull(() => renderApp()); STORE.trySync(); };
+  $('#menu-sair', sheet).onclick = () => { fechar(); sairDaConta(); };
+}
+
+function sairDaConta() {
+  confirmar('Sair da conta', 'Os dados deste aparelho continuam salvos e sincronizam quando você entrar de novo.', 'Sair', () => {
+    STORE.setUser(null);
+    SESSAO = null;
+    location.hash = '#/login';
+  });
+}
+
+function renderApp() {
+  const app = $('#app');
+  if (!SESSAO && ROTA.nome !== 'login') { location.hash = '#/login'; return; }
+  switch (ROTA.nome) {
+    case 'login': return renderLogin(app);
+    case 'novo': return criarNovo();
+    case 'editor': return renderEditor(app);
+    case 'detalhe': return renderDetalhe(app);
+    case 'admin': return renderAdmin(app);
+    default: return renderLista(app);
+  }
+}
+
+/* ══════════════════ Login ══════════════════ */
+
+function renderLogin(app) {
+  document.title = 'Entrar · Brief de Medição';
+  app.innerHTML =
+    '<div class="tela-login"><div class="cartao-login">' +
+    '<img class="logo" src="logo-impresilk.png" alt="Impresilk">' +
+    '<h1>Brief de Medição</h1>' +
+    '<div class="sub">Entre com seu usuário da equipe</div>' +
+    '<div class="campo"><label>Usuário</label><input id="lg-usuario" type="text" autocomplete="username" autocapitalize="none"></div>' +
+    '<div class="campo"><label>Senha</label><input id="lg-senha" type="password" autocomplete="current-password"></div>' +
+    '<div id="lg-erro"></div>' +
+    '<button class="botao largo" id="lg-entrar">Entrar</button>' +
+    '<p class="dica-campo" style="text-align:center; margin-top:12px">Primeiro acesso neste aparelho precisa de internet.</p>' +
+    '</div></div>';
+  const entrar = async () => {
+    const usuario = $('#lg-usuario').value.trim();
+    const senha = $('#lg-senha').value;
+    let cfg = STORE.getCFG();
+    if (!(cfg.usuarios || []).length && navigator.onLine) { await STORE.pullCFG(); cfg = STORE.getCFG(); }
+    const u = (cfg.usuarios || []).find(x => norm(x.usuario) === norm(usuario));
+    if (!u || String(u.senha) !== senha) {
+      $('#lg-erro').innerHTML = '<div class="aviso vermelho">Usuário ou senha incorretos.</div>';
+      return;
+    }
+    if (u.ativo === false) {
+      $('#lg-erro').innerHTML = '<div class="aviso vermelho">Este usuário está desativado. Fale com o admin.</div>';
+      return;
+    }
+    STORE.setUser({ usuario: u.usuario, nome: u.nome, papel: u.papel });
+    SESSAO = STORE.getUser();
+    location.hash = '#/';
+  };
+  $('#lg-entrar').onclick = entrar;
+  $('#lg-senha').addEventListener('keydown', e => { if (e.key === 'Enter') entrar(); });
+}
+
+/* ══════════════════ Modelo do briefing ══════════════════ */
+
+function novoBriefing() {
+  const agora = new Date().toISOString();
+  return {
+    id: STORE.uuid(),
+    situacao: 'rascunho',
+    status: '',
+    vendedor: SESSAO.nome,
+    vendedorUsuario: SESSAO.usuario,
+    osNumero: '', semOS: false, osOrigem: '', osServico: '',
+    cliente: '', responsavel: '', telefone: '', comoConheceu: '',
+    dataHora: agora,
+    tipoMedicao: '', naturezaServico: '', ambiente: '',
+    quemMediu: SESSAO.nome,
+    endereco: '', estabelecimento: '', pontoReferencia: '', geo: null,
+    itens: [],
+    croquis: [],
+    obsGerais: {
+      energia: '', energiaOnde: '', voltagem: '',
+      obstaculos: [], obstaculoOutro: '',
+      equipamento: '', equipamentoDetalhe: '',
+      servicosExtras: [], prazo: '', briefingCliente: '',
+      arteAlta: '', projeto3D: '', budget: '', formaPagamento: '',
+      equipeInstalacao: '', tempoExecucao: '', pontoTipo: ''
+    },
+    enviadoEm: null, apagadoEm: null, apagadoPor: '',
+    criadoEm: agora, criadoPor: SESSAO.nome,
+    atualizadoEm: agora, atualizadoPor: SESSAO.nome
+  };
+}
+
+function novoItem() {
+  return {
+    id: STORE.uuid(), tipo: '', tipoOutro: '', detalheServico: '',
+    medidas: [{ largura: '', altura: '' }], alturaInstalacao: '',
+    superficies: [], superficieOutra: '', fotos: [], obs: ''
+  };
+}
+
+function criarNovo() {
+  if (!podeCriar()) { location.hash = '#/'; return; }
+  const b = novoBriefing();
+  STORE.saveOS(JSON.parse(JSON.stringify(b)));
+  location.hash = '#/editar/' + b.id;
+}
+
+let _timerSalvar = null;
+function salvarRascunho(imediato) {
+  if (!BRIEF) return;
+  BRIEF.atualizadoEm = new Date().toISOString();
+  BRIEF.atualizadoPor = SESSAO.nome;
+  clearTimeout(_timerSalvar);
+  const gravar = () => {
+    STORE.saveOS(JSON.parse(JSON.stringify(BRIEF)));
+    const s = $('#salvo-info');
+    if (s) s.textContent = 'Salvo automaticamente';
+  };
+  if (imediato) gravar();
+  else _timerSalvar = setTimeout(gravar, 600);
+}
+
+function pendencias(b) {
+  const p = [];
+  if (!String(b.cliente || '').trim()) p.push('Nome do cliente');
+  if (!String(b.telefone || '').trim()) p.push('Telefone do cliente');
+  if (!b.tipoMedicao) p.push('Tipo de medição (Orçamento ou Execução)');
+  if (!(b.itens || []).length) p.push('Pelo menos um item medido');
+  (b.itens || []).forEach((it, i) => {
+    const n = 'Item ' + (i + 1) + (nomeItem(it) ? ' (' + nomeItem(it) + ')' : '');
+    if (!nomeItem(it)) p.push(n + ': nome do item');
+    if (!temMedida(it)) p.push(n + ': largura e altura');
+    FOTOS_ITEM.filter(f => f.obrig).forEach(f => {
+      if (!(it.fotos || []).some(x => x.tipo === f.tipo && !x.arquivada)) p.push(n + ': foto ' + f.rotulo.toLowerCase());
+    });
+  });
+  return p;
+}
+
+/* ══════════════════ Lista ══════════════════ */
+
+function visiveisPraSessao() {
+  let lista = STORE.getAllOS().filter(b => b && !b.apagadoEm);
+  if (SESSAO.papel === 'vendedor') {
+    lista = lista.filter(b => b.vendedorUsuario === SESSAO.usuario || b.criadoPor === SESSAO.nome);
+  } else if (SESSAO.papel === 'designer') {
+    lista = lista.filter(b => b.situacao === 'enviado');
+  }
+  return lista;
+}
+
+function filtrarLista(lista) {
+  const t = norm(FILTROS.texto);
+  const os = FILTROS.os.trim();
+  return lista.filter(b => {
+    if (t && !norm((b.cliente || '') + ' ' + (b.estabelecimento || '') + ' ' + (b.responsavel || '')).includes(t)) return false;
+    if (os && !String(b.osNumero || '').includes(os)) return false;
+    const dia = diaLocal(b.dataHora || b.criadoEm);
+    if (FILTROS.de && dia < FILTROS.de) return false;
+    if (FILTROS.ate && dia > FILTROS.ate) return false;
+    if (FILTROS.status && b.status !== FILTROS.status) return false;
+    if (FILTROS.vendedor && b.vendedor !== FILTROS.vendedor) return false;
+    if (FILTROS.tipo && b.tipoMedicao !== FILTROS.tipo) return false;
+    if (FILTROS.semOS && String(b.osNumero || '').trim()) return false;
+    return true;
+  });
+}
+
+function renderLista(app) {
+  document.title = 'Briefings · Brief de Medição';
+  const todos = visiveisPraSessao();
+  const vendedores = [...new Set(STORE.getAllOS().filter(b => !b.apagadoEm).map(b => b.vendedor).filter(Boolean))].sort();
+  const filtrados = filtrarLista(todos).sort((a, z) => String(z.dataHora || z.criadoEm).localeCompare(String(a.dataHora || a.criadoEm)));
+
+  app.innerHTML =
+    htmlTopo('Briefings') +
+    '<main class="miolo">' +
+    '<div class="card"><div class="filtros">' +
+    '<div class="campo" style="margin:0"><label>Buscar cliente</label><input id="f-texto" type="search" placeholder="Parte do nome já encontra" value="' + esc(FILTROS.texto) + '"></div>' +
+    '<div class="campo" style="margin:0"><label>Número da O.S.</label><input id="f-os" inputmode="numeric" value="' + esc(FILTROS.os) + '"></div>' +
+    '<div class="campo" style="margin:0"><label>De</label><input id="f-de" type="date" value="' + esc(FILTROS.de) + '"></div>' +
+    '<div class="campo" style="margin:0"><label>Até</label><input id="f-ate" type="date" value="' + esc(FILTROS.ate) + '"></div>' +
+    '<div class="linha-filtros">' +
+    '<div class="campo" style="margin:0"><label>Status</label><select id="f-status"><option value="">Todos</option>' +
+    STATUS_LISTA.map(s => '<option ' + (FILTROS.status === s ? 'selected' : '') + '>' + esc(s) + '</option>').join('') + '</select></div>' +
+    (SESSAO.papel !== 'vendedor'
+      ? '<div class="campo" style="margin:0"><label>Vendedor</label><select id="f-vendedor"><option value="">Todos</option>' +
+        vendedores.map(v => '<option ' + (FILTROS.vendedor === v ? 'selected' : '') + '>' + esc(v) + '</option>').join('') + '</select></div>'
+      : '') +
+    '<div class="campo" style="margin:0"><label>Tipo de medição</label><select id="f-tipo"><option value="">Todos</option>' +
+    ['Orçamento', 'Execução'].map(v => '<option ' + (FILTROS.tipo === v ? 'selected' : '') + '>' + v + '</option>').join('') + '</select></div>' +
+    '<div class="campo" style="margin:0"><label>&nbsp;</label>' +
+    '<button id="f-semos" class="chip ' + (FILTROS.semOS ? 'marcado' : '') + '" style="width:100%; min-height:48px">Só sem O.S.</button></div>' +
+    '</div>' +
+    '<div style="display:flex; gap:8px; grid-column: 1 / -1;">' +
+    '<button class="botao suave mini" id="f-limpar">Limpar filtros</button>' +
+    '<button class="botao fantasma mini" id="btn-ficha-branco">🖨 Ficha de visita em branco</button>' +
+    '<span class="salvo-info" style="margin-left:auto; align-self:center">' + filtrados.length + ' de ' + todos.length + '</span>' +
+    '</div>' +
+    '</div></div>' +
+    '<div id="lista-cards">' + htmlCards(filtrados) + '</div>' +
+    '</main>' +
+    (podeCriar() ? '<button class="fab" id="fab-novo">➕ Novo briefing</button>' : '');
+
+  ligarTopo();
+  const rerenderCards = () => { $('#lista-cards').innerHTML = htmlCards(filtrarLista(visiveisPraSessao()).sort((a, z) => String(z.dataHora || z.criadoEm).localeCompare(String(a.dataHora || a.criadoEm)))); ligarCards(); };
+  $('#f-texto').oninput = debounce(e => { FILTROS.texto = e.target.value; rerenderCards(); }, 250);
+  $('#f-os').oninput = debounce(e => { FILTROS.os = e.target.value; rerenderCards(); }, 250);
+  $('#f-de').onchange = e => { FILTROS.de = e.target.value; rerenderCards(); };
+  $('#f-ate').onchange = e => { FILTROS.ate = e.target.value; rerenderCards(); };
+  $('#f-status').onchange = e => { FILTROS.status = e.target.value; rerenderCards(); };
+  const fv = $('#f-vendedor'); if (fv) fv.onchange = e => { FILTROS.vendedor = e.target.value; rerenderCards(); };
+  $('#f-tipo').onchange = e => { FILTROS.tipo = e.target.value; rerenderCards(); };
+  $('#f-semos').onclick = e => { FILTROS.semOS = !FILTROS.semOS; e.target.classList.toggle('marcado', FILTROS.semOS); rerenderCards(); };
+  $('#f-limpar').onclick = () => { FILTROS = { texto: '', os: '', de: '', ate: '', status: '', vendedor: '', tipo: '', semOS: false }; renderApp(); };
+  $('#btn-ficha-branco').onclick = () => exportarFichaVisita(null);
+  const fab = $('#fab-novo'); if (fab) fab.onclick = () => { location.hash = '#/novo'; };
+  ligarCards();
+}
+
+function htmlCards(lista) {
+  if (!lista.length) {
+    return '<div class="vazio"><div class="icone">📭</div>Nenhum briefing por aqui ainda.' +
+      (podeCriar() ? '<br>Toque em "Novo briefing" pra começar.' : '') + '</div>';
+  }
+  return lista.map(b => {
+    const rascunho = b.situacao !== 'enviado';
+    return (
+      '<button class="cartao-brief" data-id="' + b.id + '" data-rascunho="' + (rascunho ? '1' : '') + '">' +
+      '<div><div class="nome">' + esc(b.cliente || 'Cliente sem nome') + (b.estabelecimento ? ' · ' + esc(b.estabelecimento) : '') + '</div>' +
+      '<div class="meta">' + fmtDataHora(b.dataHora || b.criadoEm) + ' · ' + esc(b.vendedor || '') +
+      ' · ' + (b.itens || []).length + ' item(ns)</div>' +
+      '<div class="badges">' +
+      (rascunho ? '<span class="badge rascunho">RASCUNHO</span>' : badgeStatus(b.status)) +
+      (b.tipoMedicao ? '<span class="badge ' + (b.tipoMedicao === 'Execução' ? 'tipo-execucao' : 'tipo-orcamento') + '">' + esc(b.tipoMedicao) + '</span>' : '') +
+      (String(b.osNumero || '').trim() ? '<span class="badge neutro">O.S. ' + esc(b.osNumero) + '</span>' : '<span class="badge sem-os">SEM O.S.</span>') +
+      '</div></div>' +
+      '</button>'
+    );
+  }).join('');
+}
+
+function ligarCards() {
+  $$('.cartao-brief').forEach(c => {
+    c.onclick = () => {
+      const id = c.dataset.id;
+      const b = STORE.getOS(id);
+      if (!b) return;
+      const meu = b.vendedorUsuario === SESSAO.usuario;
+      if (b.situacao !== 'enviado' && (meu || SESSAO.papel === 'admin')) location.hash = '#/editar/' + id;
+      else location.hash = '#/b/' + id;
+    };
+  });
+}
+
+/* ══════════════════ Editor (wizard) ══════════════════ */
+
+const ETAPAS_DEF = [
+  { n: 1, nome: 'Vendedor' },
+  { n: 2, nome: 'O.S. e cliente' },
+  { n: 3, nome: 'Local' },
+  { n: 4, nome: 'Itens e fotos' },
+  { n: 5, nome: 'Observações' },
+  { n: 6, nome: 'Revisão e envio' }
+];
+
+function renderEditor(app) {
+  const b = STORE.getOS(ROTA.id);
+  if (!b) { toast('Briefing não encontrado neste aparelho', 'erro'); location.hash = '#/'; return; }
+  if (b.situacao === 'enviado' && SESSAO.papel !== 'admin') { location.hash = '#/b/' + b.id; return; }
+  BRIEF = b;
+  if (!BRIEF.obsGerais) BRIEF.obsGerais = novoBriefing().obsGerais;
+  if (!BRIEF.croquis) BRIEF.croquis = [];
+  document.title = 'Briefing · ' + (BRIEF.cliente || 'novo');
+  const cfg = STORE.getCFG();
+
+  app.innerHTML =
+    htmlTopo(BRIEF.cliente ? 'Briefing: ' + BRIEF.cliente : 'Novo briefing') +
+    '<main class="miolo"><div class="editor-grade">' +
+    '<aside class="sidebar-etapas">' +
+    ETAPAS_DEF.map(e => '<a href="#" data-etapa="' + e.n + '" class="' + (e.n === ETAPA ? 'ativa' : '') + '">' + e.n + '. ' + e.nome + '</a>').join('') +
+    '<div style="padding:12px 14px"><span id="salvo-info" class="salvo-info"></span></div>' +
+    '</aside>' +
+    '<div>' +
+    '<div class="progresso"><div class="passos"><span>Etapa ' + ETAPA + ' de 6</span><span>' + esc(ETAPAS_DEF[ETAPA - 1].nome) + '</span></div>' +
+    '<div class="trilho"><div class="barra" style="width:' + (ETAPA / 6 * 100) + '%"></div></div></div>' +
+    htmlEtapa1() + htmlEtapa2(cfg) + htmlEtapa3() + htmlEtapa4(cfg) + htmlEtapa5() + htmlEtapa6() +
+    '</div></div></main>' +
+    '<div class="rodape-wizard">' +
+    '<button class="botao fantasma so-mobile" id="btn-voltar"' + (ETAPA === 1 ? ' disabled' : '') + '>← Voltar</button>' +
+    (ETAPA < 6
+      ? '<button class="botao so-mobile" id="btn-avancar">Avançar →</button>'
+      : '') +
+    '</div>';
+
+  // Ativa a etapa atual no mobile
+  $$('.etapa').forEach(sec => sec.classList.toggle('ativa', Number(sec.dataset.etapa) === ETAPA));
+
+  ligarTopo();
+  ligarEditor(cfg);
+  carregarThumbs();
+  if (!ehDesktop()) window.scrollTo(0, 0);
+}
+
+function mudarEtapa(n) {
+  ETAPA = Math.min(6, Math.max(1, n));
+  renderApp();
+}
+
+function htmlEtapa1() {
+  return (
+    '<section class="etapa" data-etapa="1"><div class="card">' +
+    '<div class="sub-secao">Etapa 1 · Vendedor</div>' +
+    '<div class="campo"><label>Vendedor (preenchido pelo login)</label>' +
+    '<input type="text" value="' + esc(BRIEF.vendedor) + '" disabled></div>' +
+    '<p class="dica-campo">Se quem mediu for outra pessoa, informe na etapa 2.</p>' +
+    '</div></section>'
+  );
+}
+
+function htmlEtapa2(cfg) {
+  const exec = BRIEF.tipoMedicao === 'Execução';
+  return (
+    '<section class="etapa" data-etapa="2"><div class="card">' +
+    '<div class="sub-secao">Etapa 2 · O.S. e cliente</div>' +
+
+    '<div class="campo"><label>Número da O.S. (opcional)</label>' +
+    '<div style="display:flex; gap:8px"><input id="c-osnumero" inputmode="numeric" placeholder="Ex: 22416" value="' + esc(BRIEF.osNumero) + '" style="flex:1">' +
+    '<button class="botao suave" id="btn-buscar-os" style="min-width:110px">Buscar</button></div>' +
+    '<div id="os-resultado">' +
+    (BRIEF.osOrigem && BRIEF.osNumero ? '<div class="aviso verde">O.S. ' + esc(BRIEF.osNumero) + ' vinculada' + (BRIEF.osServico ? ': ' + esc(BRIEF.osServico) : '') + '</div>' : '') +
+    '</div>' +
+    '<label class="chip ' + (BRIEF.semOS ? 'marcado' : '') + '" id="chip-semos" style="margin-top:8px; display:inline-flex">Sem O.S. por enquanto</label>' +
+    '<div class="dica-campo">Sem número agora? Sem problema, o briefing segue e recebe a O.S. depois.</div></div>' +
+
+    '<div class="campo"><label>Nome do cliente / empresa <span class="obrig">*</span></label>' +
+    '<input id="c-cliente" type="text" value="' + esc(BRIEF.cliente) + '"></div>' +
+    '<div class="linha-2">' +
+    '<div class="campo"><label>Responsável (contato)</label><input id="c-responsavel" type="text" value="' + esc(BRIEF.responsavel) + '"></div>' +
+    '<div class="campo"><label>Telefone <span class="obrig">*</span></label><input id="c-telefone" type="tel" inputmode="tel" placeholder="(38) 99999-9999" value="' + esc(BRIEF.telefone) + '"></div>' +
+    '</div>' +
+    '<div class="linha-2">' +
+    '<div class="campo"><label>Data e hora da visita</label><input id="c-datahora" type="datetime-local" value="' + isoParaInputLocal(BRIEF.dataHora) + '"></div>' +
+    '<div class="campo"><label>Como nos conheceu</label><select id="c-conheceu"><option value="">Escolher…</option>' +
+    COMO_CONHECEU.map(o => '<option ' + (BRIEF.comoConheceu === o ? 'selected' : '') + '>' + o + '</option>').join('') + '</select></div>' +
+    '</div>' +
+
+    '<div class="campo"><label>Tipo de medição <span class="obrig">*</span></label>' +
+    '<div class="opcoes duas">' +
+    '<div class="opcao ' + (BRIEF.tipoMedicao === 'Orçamento' ? 'marcada' : '') + '" data-tipomed="Orçamento">📄 Orçamento</div>' +
+    '<div class="opcao ' + (exec ? 'marcada' : '') + '" data-tipomed="Execução">⚠️ Execução</div>' +
+    '</div>' +
+    (exec ? '<div class="aviso vermelho">Estas medidas vão pra produção. Confira duas vezes.</div>' : '') +
+    '</div>' +
+
+    '<div class="linha-2">' +
+    '<div class="campo"><label>Natureza do serviço</label><select id="c-natureza"><option value="">Escolher…</option>' +
+    ['Serviço novo', 'Restauração ou troca', 'Remoção'].map(o => '<option ' + (BRIEF.naturezaServico === o ? 'selected' : '') + '>' + o + '</option>').join('') + '</select></div>' +
+    '<div class="campo"><label>Ambiente</label><select id="c-ambiente"><option value="">Escolher…</option>' +
+    ['Externo', 'Interno'].map(o => '<option ' + (BRIEF.ambiente === o ? 'selected' : '') + '>' + o + '</option>').join('') + '</select></div>' +
+    '</div>' +
+
+    '<div class="campo"><label>Quem mediu</label><input id="c-quemmediu" type="text" value="' + esc(BRIEF.quemMediu) + '">' +
+    '<div class="dica-campo">Pode ser diferente do vendedor.</div></div>' +
+    '</div></section>'
+  );
+}
+
+function htmlEtapa3() {
+  return (
+    '<section class="etapa" data-etapa="3"><div class="card">' +
+    '<div class="sub-secao">Etapa 3 · Local</div>' +
+    '<div class="campo"><label>Endereço completo</label>' +
+    '<textarea id="c-endereco" rows="2">' + esc(BRIEF.endereco) + '</textarea>' +
+    '<button class="botao suave mini" id="btn-gps" style="margin-top:8px">📍 Usar minha localização</button>' +
+    '<span id="gps-status" class="dica-campo" style="margin-left:8px"></span></div>' +
+    '<div class="linha-2">' +
+    '<div class="campo"><label>Nome do estabelecimento (opcional)</label><input id="c-estab" type="text" value="' + esc(BRIEF.estabelecimento) + '"></div>' +
+    '<div class="campo"><label>Ponto de referência</label><input id="c-ref" type="text" value="' + esc(BRIEF.pontoReferencia) + '"></div>' +
+    '</div>' +
+    '<button class="botao fantasma mini" id="btn-ficha-visita">🖨 Ficha de visita desta visita (PDF)</button>' +
+    '<div class="dica-campo" style="margin-top:6px">Imprima antes de sair: a ficha tem espaço quadriculado pro desenho a mão. Depois fotografe o desenho na etapa 4.</div>' +
+    '</div></section>'
+  );
+}
+
+function htmlEtapa4(cfg) {
+  return (
+    '<section class="etapa" data-etapa="4">' +
+    '<div class="card" style="display:flex; align-items:center; justify-content:space-between; gap:10px">' +
+    '<div><div class="sub-secao" style="margin:0">Etapa 4 · Itens medidos</div>' +
+    '<span class="dica-campo">' + BRIEF.itens.length + ' item(ns) até agora</span></div>' +
+    '<button class="botao mini fantasma" id="btn-manual-4">❓ Manual</button></div>' +
+    '<div id="lista-itens">' + BRIEF.itens.map((it, i) => htmlItem(it, i, cfg)).join('') + '</div>' +
+    '<button class="botao largo suave" id="btn-add-item" style="margin-bottom:14px">➕ Adicionar item</button>' +
+    '<div class="card"><div class="sub-secao">Desenhos da visita (croquis)</div>' +
+    '<p class="dica-campo" style="margin-bottom:10px">Fotografe a ficha de visita desenhada a mão. Os desenhos entram no PDF final pro designer.</p>' +
+    '<div class="grade-fotos" id="grade-croquis">' +
+    BRIEF.croquis.map((c, i) =>
+      '<div class="slot-foto cheio"><div class="rotulo">Desenho ' + (i + 1) + '</div>' +
+      '<img class="thumb" data-foto-id="' + esc(c.id) + '" data-galeria="croquis" data-indice="' + i + '" alt="Desenho ' + (i + 1) + '">' +
+      '<div class="acoes"><button class="botao mini perigo" data-remover-croqui="' + i + '">Remover</button></div></div>'
+    ).join('') +
+    '<div class="slot-foto"><div class="rotulo">Novo desenho</div>' +
+    '<button class="botao-foto" id="btn-add-croqui"><span class="icone">📷</span>Fotografar ficha</button>' +
+    '<input type="file" accept="image/*" capture="environment" id="input-croqui" hidden></div>' +
+    '</div></div>' +
+    '</section>'
+  );
+}
+
+function htmlItem(item, idx, cfg) {
+  const tipos = (cfg.tiposItem || []);
+  const superficies = (cfg.superficies || []);
+  const dicas = cfg.dicas || {};
+  const marcadas = item.superficies || [];
+  const area = areaItem(item);
+  return (
+    '<div class="card-item" data-item="' + item.id + '">' +
+    '<div class="cabeca"><h3>Item ' + (idx + 1) + (nomeItem(item) ? ' · ' + esc(nomeItem(item)) : '') + '</h3>' +
+    '<button class="botao mini perigo" data-remover-item="' + item.id + '">Remover</button></div>' +
+
+    '<div class="linha-2">' +
+    '<div class="campo"><label>Nome do item <span class="obrig">*</span></label>' +
+    '<select data-icampo="tipo"><option value="">Escolher…</option>' +
+    tipos.map(t => '<option ' + (item.tipo === t ? 'selected' : '') + '>' + esc(t) + '</option>').join('') + '</select></div>' +
+    (item.tipo === 'Outro'
+      ? '<div class="campo"><label>Qual?</label><input type="text" data-icampo="tipoOutro" value="' + esc(item.tipoOutro) + '"></div>'
+      : '<div class="campo"><label>Detalhe do serviço/material</label><input type="text" data-icampo="detalheServico" placeholder="Ex: ACM com letra caixa iluminada" value="' + esc(item.detalheServico) + '"></div>') +
+    '</div>' +
+    (item.tipo === 'Outro' ? '<div class="campo"><label>Detalhe do serviço/material</label><input type="text" data-icampo="detalheServico" value="' + esc(item.detalheServico) + '"></div>' : '') +
+
+    '<div class="campo"><label>Medidas (cm) <span class="obrig">*</span> <button class="botao mini fantasma" data-manual="medir" style="min-height:32px; padding:4px 10px; margin-left:6px">?</button></label>' +
+    (item.medidas || []).map((p, pi) =>
+      '<div class="par-medida">' +
+      '<input inputmode="decimal" placeholder="Largura" data-medida="largura" data-par="' + pi + '" value="' + esc(p.largura) + '">' +
+      '<span class="x">×</span>' +
+      '<input inputmode="decimal" placeholder="Altura" data-medida="altura" data-par="' + pi + '" value="' + esc(p.altura) + '">' +
+      ((item.medidas.length > 1) ? '<button class="acao-par" data-remover-par="' + pi + '" title="Remover este ponto">✕</button>' : '<span></span>') +
+      '</div>'
+    ).join('') +
+    '<div class="area-info" data-area-item>' + (area > 0 ? 'Área: ' + fmtM2(area) + (item.medidas.length > 1 ? ' (soma de ' + item.medidas.length + ' pontos)' : '') : 'Área calculada automática') + '</div>' +
+    '<button class="botao mini suave" data-add-par>➕ Adicionar ponto de medição (superfície irregular)</button></div>' +
+
+    '<div class="campo"><label>Altura de instalação (cm, do chão até a base da peça)</label>' +
+    '<input inputmode="decimal" data-icampo="alturaInstalacao" value="' + esc(item.alturaInstalacao) + '"></div>' +
+
+    '<div class="campo"><label>Superfície (marque todas que valem)</label>' +
+    '<div class="chips">' +
+    superficies.map(s => '<button class="chip ' + (marcadas.includes(s) ? 'marcado' : '') + '" data-superficie="' + esc(s) + '">' + esc(s) + '</button>').join('') +
+    '</div>' +
+    (marcadas.includes('Outro') ? '<div class="campo" style="margin-top:10px"><label>Qual superfície?</label><input type="text" data-icampo="superficieOutra" value="' + esc(item.superficieOutra) + '"></div>' : '') +
+    (marcadas.filter(s => dicas[s]).length
+      ? '<div class="box-dicas">' + marcadas.filter(s => dicas[s]).map(s => '<div class="uma-dica"><b>' + esc(s) + ':</b><span>' + esc(dicas[s]) + '</span></div>').join('') + '</div>'
+      : '') +
+    '</div>' +
+
+    '<div class="campo"><label>Fotos <button class="botao mini fantasma" data-manual="foto" style="min-height:32px; padding:4px 10px; margin-left:6px">?</button></label>' +
+    '<div class="grade-fotos">' +
+    FOTOS_ITEM.map(def => {
+      const f = (item.fotos || []).find(x => x.tipo === def.tipo && !x.arquivada);
+      return (
+        '<div class="slot-foto ' + (f ? 'cheio' : '') + '">' +
+        '<div class="rotulo">' + esc(def.rotulo) + (def.obrig ? ' <span class="obrig">*</span>' : '') + '</div>' +
+        (f
+          ? '<img class="thumb" data-foto-id="' + esc(f.id) + '" data-galeria="item:' + item.id + '" alt="' + esc(def.rotulo) + '">' +
+            '<div class="acoes"><button class="botao mini suave" data-trocar-foto="' + def.tipo + '">Trocar</button>' +
+            '<button class="botao mini perigo" data-remover-foto="' + def.tipo + '">✕</button></div>'
+          : '<button class="botao-foto" data-tirar-foto="' + def.tipo + '"><span class="icone">📷</span>Tirar ou enviar</button>') +
+        '<input type="file" accept="image/*" capture="environment" data-input-foto="' + def.tipo + '" hidden>' +
+        '</div>'
+      );
+    }).join('') +
+    '</div></div>' +
+
+    '<div class="campo" style="margin-bottom:0"><label>Observação do item (opcional)</label>' +
+    '<textarea data-icampo="obs" rows="2">' + esc(item.obs) + '</textarea></div>' +
+    '</div>'
+  );
+}
+
+function htmlEtapa5() {
+  const o = BRIEF.obsGerais;
+  const chip = (marcado, attr, valor, rotulo) =>
+    '<button class="chip ' + (marcado ? 'marcado' : '') + '" data-' + attr + '="' + esc(valor) + '">' + esc(rotulo || valor) + '</button>';
+  return (
+    '<section class="etapa" data-etapa="5"><div class="card">' +
+    '<div class="sub-secao">Etapa 5 · Observações gerais</div>' +
+
+    '<div class="campo"><label>Tem ponto de energia próximo?</label>' +
+    '<div class="opcoes duas">' +
+    '<div class="opcao ' + (o.energia === 'sim' ? 'marcada' : '') + '" data-energia="sim">Sim</div>' +
+    '<div class="opcao ' + (o.energia === 'nao' ? 'marcada' : '') + '" data-energia="nao">Não</div></div>' +
+    (o.energia === 'sim'
+      ? '<div class="linha-2" style="margin-top:10px">' +
+        '<div class="campo" style="margin:0"><label>Onde?</label><input type="text" id="o-energiaonde" value="' + esc(o.energiaOnde) + '"></div>' +
+        '<div class="campo" style="margin:0"><label>Voltagem</label><select id="o-voltagem"><option value="">Não sei</option>' +
+        ['127v', '220v'].map(v => '<option ' + (o.voltagem === v ? 'selected' : '') + '>' + v + '</option>').join('') + '</select></div></div>'
+      : '') +
+    '</div>' +
+
+    '<div class="campo"><label>Obstáculos no local</label><div class="chips">' +
+    OBSTACULOS.map(x => chip((o.obstaculos || []).includes(x), 'obstaculo', x)).join('') + '</div>' +
+    ((o.obstaculos || []).includes('Outro') ? '<div class="campo" style="margin-top:10px"><label>Qual obstáculo?</label><input type="text" id="o-obstoutro" value="' + esc(o.obstaculoOutro) + '"></div>' : '') +
+    '</div>' +
+
+    '<div class="campo"><label>Precisa de equipamento pra instalar?</label>' +
+    '<div class="chips">' +
+    ['Não precisa', 'Escada', 'Andaime', 'Munk'].map(x => chip(o.equipamento === x, 'equipamento', x)).join('') +
+    '</div>' +
+    (o.equipamento === 'Escada'
+      ? '<div class="campo" style="margin-top:10px"><label>Porte da escada</label><select id="o-equipdetalhe"><option value="">Escolher…</option>' +
+        ['Pequena', 'Média', 'Grande'].map(v => '<option ' + (o.equipamentoDetalhe === v ? 'selected' : '') + '>' + v + '</option>').join('') + '</select></div>'
+      : '') +
+    (o.equipamento === 'Andaime' || o.equipamento === 'Munk'
+      ? '<div class="campo" style="margin-top:10px"><label>' + (o.equipamento === 'Andaime' ? 'Altura e base (sapata ou rodinha)' : 'Detalhe do munk (altura, acesso)') + '</label>' +
+        '<input type="text" id="o-equipdetalhe-txt" value="' + esc(o.equipamentoDetalhe) + '"></div>'
+      : '') +
+    '</div>' +
+
+    '<div class="campo"><label>Ponto</label><div class="opcoes duas">' +
+    '<div class="opcao ' + (o.pontoTipo === 'Ponto novo' ? 'marcada' : '') + '" data-ponto="Ponto novo">Ponto novo</div>' +
+    '<div class="opcao ' + (o.pontoTipo === 'Ponto antigo' ? 'marcada' : '') + '" data-ponto="Ponto antigo">Ponto antigo</div></div></div>' +
+
+    '<div class="campo"><label>Serviços extras (da ficha de visita)</label><div class="chips">' +
+    SERVICOS_EXTRAS.map(x => chip((o.servicosExtras || []).includes(x), 'servico', x)).join('') + '</div></div>' +
+
+    '<div class="campo"><label>Prazo desejado pelo cliente</label><input type="text" id="o-prazo" placeholder="Ex: até 15/08, antes da inauguração" value="' + esc(o.prazo) + '"></div>' +
+
+    '<div class="campo"><label>Briefing do cliente (o que ele contou, referências, expectativa)</label>' +
+    '<textarea id="o-briefcliente" rows="3">' + esc(o.briefingCliente) + '</textarea></div>' +
+
+    '<div class="linha-2">' +
+    '<div class="campo"><label>Possui arte em alta resolução?</label><select id="o-arte"><option value="">Não sei</option>' +
+    ['Sim', 'Não'].map(v => '<option ' + (o.arteAlta === v ? 'selected' : '') + '>' + v + '</option>').join('') + '</select></div>' +
+    '<div class="campo"><label>Precisa de projeto 3D?</label><select id="o-3d"><option value="">Não sei</option>' +
+    ['Sim', 'Não'].map(v => '<option ' + (o.projeto3D === v ? 'selected' : '') + '>' + v + '</option>').join('') + '</select></div>' +
+    '</div>' +
+    '<div class="linha-2">' +
+    '<div class="campo"><label>Budget do cliente</label><select id="o-budget"><option value="">Não falamos</option>' +
+    BUDGETS.map(v => '<option ' + (o.budget === v ? 'selected' : '') + '>' + v + '</option>').join('') + '</select></div>' +
+    '<div class="campo"><label>Forma de pagamento</label><select id="o-pagamento"><option value="">Não falamos</option>' +
+    PAGAMENTOS.map(v => '<option ' + (o.formaPagamento === v ? 'selected' : '') + '>' + v + '</option>').join('') + '</select></div>' +
+    '</div>' +
+    '<div class="linha-2">' +
+    '<div class="campo"><label>Equipe estimada pra instalação</label><input inputmode="numeric" id="o-equipe" placeholder="Nº de pessoas" value="' + esc(o.equipeInstalacao) + '"></div>' +
+    '<div class="campo"><label>Tempo estimado de execução</label><input type="text" id="o-tempo" placeholder="Ex: meio dia, 2 dias" value="' + esc(o.tempoExecucao) + '"></div>' +
+    '</div>' +
+    '</div></section>'
+  );
+}
+
+function htmlEtapa6() {
+  const p = pendencias(BRIEF);
+  const semOS = !String(BRIEF.osNumero || '').trim();
+  return (
+    '<section class="etapa" data-etapa="6"><div class="card">' +
+    '<div class="sub-secao">Etapa 6 · Revisão e envio</div>' +
+    '<dl>' +
+    '<div class="dupla-dado"><dt>Cliente</dt><dd>' + esc(BRIEF.cliente || '') + '</dd></div>' +
+    '<div class="dupla-dado"><dt>Telefone</dt><dd>' + esc(BRIEF.telefone || '') + '</dd></div>' +
+    '<div class="dupla-dado"><dt>Tipo de medição</dt><dd>' + esc(BRIEF.tipoMedicao || '') + '</dd></div>' +
+    '<div class="dupla-dado"><dt>O.S.</dt><dd>' + (semOS ? 'Sem O.S. por enquanto' : esc(BRIEF.osNumero)) + '</dd></div>' +
+    '<div class="dupla-dado"><dt>Local</dt><dd>' + esc(BRIEF.endereco || 'não informado') + '</dd></div>' +
+    '<div class="dupla-dado"><dt>Quem mediu</dt><dd>' + esc(BRIEF.quemMediu || '') + '</dd></div>' +
+    '</dl>' +
+    '<div style="margin-top:12px">' +
+    BRIEF.itens.map((it, i) =>
+      '<div class="resumo-item"><b class="fonte-titulo">Item ' + (i + 1) + ': ' + esc(nomeItem(it) || 'sem nome') + '</b>' +
+      '<div class="dica-campo">' + (it.medidas || []).map(m => esc(m.largura || '?') + '×' + esc(m.altura || '?') + ' cm').join(' · ') +
+      (areaItem(it) > 0 ? ' · ' + fmtM2(areaItem(it)) : '') +
+      (it.superficies && it.superficies.length ? ' · ' + esc(it.superficies.join(', ')) : '') + '</div>' +
+      '<div class="mini-thumbs">' + (it.fotos || []).filter(f => !f.arquivada).map(f => '<img data-foto-id="' + esc(f.id) + '" alt="">').join('') + '</div>' +
+      '</div>'
+    ).join('') +
+    (BRIEF.croquis.length
+      ? '<div class="resumo-item"><b class="fonte-titulo">Desenhos da visita</b><div class="mini-thumbs">' +
+        BRIEF.croquis.map(c => '<img data-foto-id="' + esc(c.id) + '" alt="">').join('') + '</div></div>'
+      : '') +
+    '</div>' +
+    (semOS ? '<div class="aviso amarelo">Este briefing vai SEM número de O.S. Dá pra vincular depois, não trava o envio.</div>' : '') +
+    (BRIEF.tipoMedicao === 'Execução' ? '<div class="aviso vermelho">Medição de EXECUÇÃO: estas medidas vão pra produção. Confira duas vezes.</div>' : '') +
+    (p.length
+      ? '<div class="aviso vermelho" style="font-weight:400"><b>Falta resolver antes de enviar:</b><ul class="pendencias">' + p.map(x => '<li>' + esc(x) + '</li>').join('') + '</ul></div>'
+      : '<div class="aviso verde">Tudo certo pra enviar.</div>') +
+    '<button class="botao largo" id="btn-enviar" ' + (p.length ? 'disabled' : '') + '>📨 Enviar pro design</button>' +
+    '<button class="botao largo fantasma" id="btn-descartar" style="margin-top:10px">Descartar rascunho</button>' +
+    '</div></section>'
+  );
+}
+
+function ligarEditor(cfg) {
+  // Navegação
+  $$('.sidebar-etapas a[data-etapa]').forEach(a => a.onclick = e => {
+    e.preventDefault();
+    const alvo = $('.etapa[data-etapa="' + a.dataset.etapa + '"]');
+    if (ehDesktop() && alvo) alvo.scrollIntoView({ behavior: 'smooth', block: 'start' });
+    else mudarEtapa(Number(a.dataset.etapa));
+  });
+  const bv = $('#btn-voltar'); if (bv) bv.onclick = () => mudarEtapa(ETAPA - 1);
+  const ba = $('#btn-avancar'); if (ba) ba.onclick = () => mudarEtapa(ETAPA + 1);
+
+  // Etapa 2
+  const bind = (sel, campo, transf) => {
+    const el = $(sel); if (!el) return;
+    el.oninput = () => { BRIEF[campo] = transf ? transf(el.value, el) : el.value; salvarRascunho(); };
+  };
+  bind('#c-cliente', 'cliente');
+  bind('#c-responsavel', 'responsavel');
+  const tel = $('#c-telefone');
+  if (tel) tel.oninput = () => { tel.value = mascaraTel(tel.value); BRIEF.telefone = tel.value; salvarRascunho(); };
+  const dh = $('#c-datahora');
+  if (dh) dh.onchange = () => { BRIEF.dataHora = inputLocalParaISO(dh.value); salvarRascunho(); };
+  const ck = $('#c-conheceu'); if (ck) ck.onchange = () => { BRIEF.comoConheceu = ck.value; salvarRascunho(); };
+  const nat = $('#c-natureza'); if (nat) nat.onchange = () => { BRIEF.naturezaServico = nat.value; salvarRascunho(); };
+  const amb = $('#c-ambiente'); if (amb) amb.onchange = () => { BRIEF.ambiente = amb.value; salvarRascunho(); };
+  bind('#c-quemmediu', 'quemMediu');
+  const osn = $('#c-osnumero');
+  if (osn) osn.oninput = () => {
+    BRIEF.osNumero = osn.value.trim();
+    if (BRIEF.osNumero) BRIEF.semOS = false;
+    salvarRascunho();
+  };
+  const chipSem = $('#chip-semos');
+  if (chipSem) chipSem.onclick = () => {
+    BRIEF.semOS = !BRIEF.semOS;
+    if (BRIEF.semOS) { BRIEF.osNumero = ''; }
+    salvarRascunho(true); renderApp();
+  };
+  const btnBuscar = $('#btn-buscar-os');
+  if (btnBuscar) btnBuscar.onclick = () => buscarOS(btnBuscar);
+  $$('[data-tipomed]').forEach(op => op.onclick = () => {
+    BRIEF.tipoMedicao = op.dataset.tipomed;
+    salvarRascunho(true); renderApp();
+  });
+
+  // Etapa 3
+  bind('#c-endereco', 'endereco');
+  bind('#c-estab', 'estabelecimento');
+  bind('#c-ref', 'pontoReferencia');
+  const gps = $('#btn-gps'); if (gps) gps.onclick = usarLocalizacao;
+  const ficha = $('#btn-ficha-visita'); if (ficha) ficha.onclick = () => exportarFichaVisita(BRIEF);
+
+  // Etapa 4
+  const badd = $('#btn-add-item');
+  if (badd) badd.onclick = () => { BRIEF.itens.push(novoItem()); salvarRascunho(true); renderApp(); };
+  const bman = $('#btn-manual-4'); if (bman) bman.onclick = () => abrirManual();
+  $$('.card-item').forEach(cardEl => ligarItem(cardEl, cfg));
+  const btnCroqui = $('#btn-add-croqui');
+  const inputCroqui = $('#input-croqui');
+  if (btnCroqui && inputCroqui) {
+    btnCroqui.onclick = () => inputCroqui.click();
+    inputCroqui.onchange = () => {
+      if (inputCroqui.files && inputCroqui.files[0]) anexarFoto(inputCroqui.files[0], BRIEF.id, '@croqui', 'croqui');
+      inputCroqui.value = '';
+    };
+  }
+  $$('[data-remover-croqui]').forEach(bt => bt.onclick = () => {
+    const i = Number(bt.dataset.removerCroqui);
+    confirmar('Remover desenho', 'Remover este desenho do briefing?', 'Remover', () => {
+      const c = BRIEF.croquis[i];
+      if (c) STORE.delFotoSync(c.id);
+      BRIEF.croquis.splice(i, 1);
+      salvarRascunho(true); renderApp();
+    }, true);
+  });
+
+  // Etapa 5
+  $$('[data-energia]').forEach(op => op.onclick = () => { BRIEF.obsGerais.energia = op.dataset.energia; salvarRascunho(true); renderApp(); });
+  const eo = $('#o-energiaonde'); if (eo) eo.oninput = () => { BRIEF.obsGerais.energiaOnde = eo.value; salvarRascunho(); };
+  const vo = $('#o-voltagem'); if (vo) vo.onchange = () => { BRIEF.obsGerais.voltagem = vo.value; salvarRascunho(); };
+  $$('[data-obstaculo]').forEach(ch => ch.onclick = () => {
+    const v = ch.dataset.obstaculo;
+    const arr = BRIEF.obsGerais.obstaculos || (BRIEF.obsGerais.obstaculos = []);
+    const i = arr.indexOf(v);
+    if (i >= 0) arr.splice(i, 1); else arr.push(v);
+    salvarRascunho(true); renderApp();
+  });
+  const oo = $('#o-obstoutro'); if (oo) oo.oninput = () => { BRIEF.obsGerais.obstaculoOutro = oo.value; salvarRascunho(); };
+  $$('[data-equipamento]').forEach(ch => ch.onclick = () => {
+    BRIEF.obsGerais.equipamento = ch.dataset.equipamento;
+    BRIEF.obsGerais.equipamentoDetalhe = '';
+    salvarRascunho(true); renderApp();
+  });
+  const ed = $('#o-equipdetalhe'); if (ed) ed.onchange = () => { BRIEF.obsGerais.equipamentoDetalhe = ed.value; salvarRascunho(); };
+  const edt = $('#o-equipdetalhe-txt'); if (edt) edt.oninput = () => { BRIEF.obsGerais.equipamentoDetalhe = edt.value; salvarRascunho(); };
+  $$('[data-ponto]').forEach(op => op.onclick = () => {
+    BRIEF.obsGerais.pontoTipo = BRIEF.obsGerais.pontoTipo === op.dataset.ponto ? '' : op.dataset.ponto;
+    salvarRascunho(true); renderApp();
+  });
+  $$('[data-servico]').forEach(ch => ch.onclick = () => {
+    const v = ch.dataset.servico;
+    const arr = BRIEF.obsGerais.servicosExtras || (BRIEF.obsGerais.servicosExtras = []);
+    const i = arr.indexOf(v);
+    if (i >= 0) arr.splice(i, 1); else arr.push(v);
+    salvarRascunho(true); renderApp();
+  });
+  [['#o-prazo', 'prazo'], ['#o-briefcliente', 'briefingCliente'], ['#o-equipe', 'equipeInstalacao'], ['#o-tempo', 'tempoExecucao']].forEach(([sel, campo]) => {
+    const el = $(sel); if (el) el.oninput = () => { BRIEF.obsGerais[campo] = el.value; salvarRascunho(); };
+  });
+  [['#o-arte', 'arteAlta'], ['#o-3d', 'projeto3D'], ['#o-budget', 'budget'], ['#o-pagamento', 'formaPagamento']].forEach(([sel, campo]) => {
+    const el = $(sel); if (el) el.onchange = () => { BRIEF.obsGerais[campo] = el.value; salvarRascunho(); };
+  });
+
+  // Etapa 6
+  const be = $('#btn-enviar');
+  if (be) be.onclick = enviarBriefing;
+  const bd = $('#btn-descartar');
+  if (bd) bd.onclick = () => confirmar('Descartar rascunho',
+    'O rascunho vai pra lixeira do admin e some da sua lista. Dá pra recuperar em até 30 dias.', 'Descartar', () => {
+      BRIEF.apagadoEm = new Date().toISOString();
+      BRIEF.apagadoPor = SESSAO.nome;
+      salvarRascunho(true);
+      BRIEF = null;
+      location.hash = '#/';
+    }, true);
+
+  // Manuais contextuais
+  $$('[data-manual]').forEach(bt => bt.onclick = e => { e.preventDefault(); abrirManual(bt.dataset.manual === 'foto' ? 'foto' : 'medir'); });
+}
+
+function ligarItem(cardEl, cfg) {
+  const itemId = cardEl.dataset.item;
+  const item = BRIEF.itens.find(i => i.id === itemId);
+  if (!item) return;
+
+  $$('[data-icampo]', cardEl).forEach(inp => {
+    const campo = inp.dataset.icampo;
+    const evento = inp.tagName === 'SELECT' ? 'onchange' : 'oninput';
+    inp[evento === 'onchange' ? 'onchange' : 'oninput'] = () => {
+      item[campo] = inp.value;
+      if (campo === 'tipo') { salvarRascunho(true); renderApp(); return; }
+      salvarRascunho();
+    };
+  });
+
+  $$('[data-medida]', cardEl).forEach(inp => {
+    inp.oninput = () => {
+      const par = item.medidas[Number(inp.dataset.par)];
+      if (!par) return;
+      par[inp.dataset.medida] = inp.value;
+      const area = areaItem(item);
+      const alvo = $('[data-area-item]', cardEl);
+      if (alvo) alvo.textContent = area > 0
+        ? 'Área: ' + fmtM2(area) + (item.medidas.length > 1 ? ' (soma de ' + item.medidas.length + ' pontos)' : '')
+        : 'Área calculada automática';
+      salvarRascunho();
+    };
+  });
+  const addPar = $('[data-add-par]', cardEl);
+  if (addPar) addPar.onclick = () => { item.medidas.push({ largura: '', altura: '' }); salvarRascunho(true); renderApp(); };
+  $$('[data-remover-par]', cardEl).forEach(bt => bt.onclick = () => {
+    item.medidas.splice(Number(bt.dataset.removerPar), 1);
+    salvarRascunho(true); renderApp();
+  });
+
+  $$('[data-superficie]', cardEl).forEach(ch => ch.onclick = () => {
+    const v = ch.dataset.superficie;
+    const arr = item.superficies || (item.superficies = []);
+    const i = arr.indexOf(v);
+    if (i >= 0) arr.splice(i, 1); else arr.push(v);
+    salvarRascunho(true); renderApp();
+  });
+
+  const remover = $('[data-remover-item]', cardEl);
+  if (remover) remover.onclick = () => confirmar('Remover item',
+    'Remover este item e as fotos dele do briefing?', 'Remover', () => {
+      (item.fotos || []).forEach(f => STORE.delFotoSync(f.id));
+      BRIEF.itens = BRIEF.itens.filter(i => i.id !== itemId);
+      salvarRascunho(true); renderApp();
+    }, true);
+
+  FOTOS_ITEM.forEach(def => {
+    const input = $('[data-input-foto="' + def.tipo + '"]', cardEl);
+    const tirar = $('[data-tirar-foto="' + def.tipo + '"]', cardEl);
+    const trocar = $('[data-trocar-foto="' + def.tipo + '"]', cardEl);
+    const rem = $('[data-remover-foto="' + def.tipo + '"]', cardEl);
+    if (input) input.onchange = () => {
+      if (input.files && input.files[0]) anexarFoto(input.files[0], BRIEF.id, itemId, def.tipo);
+      input.value = '';
+    };
+    if (tirar) tirar.onclick = () => input && input.click();
+    if (trocar) trocar.onclick = () => input && input.click();
+    if (rem) rem.onclick = () => confirmar('Remover foto', 'Remover a foto "' + def.rotulo + '"?', 'Remover', () => {
+      const i = (item.fotos || []).findIndex(f => f.tipo === def.tipo && !f.arquivada);
+      if (i >= 0) { STORE.delFotoSync(item.fotos[i].id); item.fotos.splice(i, 1); salvarRascunho(true); renderApp(); }
+    }, true);
+  });
+}
+
+// Regra do kit: captura a referência do draft ANTES do await e revalida depois
+// (upload lento × usuário fechando a tela).
+async function anexarFoto(file, briefId, itemId, tipoFoto) {
+  toast('Comprimindo e salvando a foto…');
+  const fileId = await STORE.pushPhoto(file);
+  if (!fileId) { toast('Não consegui ler essa foto. Tente de novo.', 'erro'); return; }
+  if (!BRIEF || BRIEF.id !== briefId) return; // a tela mudou durante o upload
+  const salva = await STORE.getFoto(fileId);
+  const bytes = salva && salva.base64 ? Math.round(salva.base64.length * 0.75) : 0;
+  if (itemId === '@croqui') {
+    BRIEF.croquis.push({ id: fileId, bytes });
+  } else {
+    const item = BRIEF.itens.find(i => i.id === itemId);
+    if (!item) return;
+    const jaTem = (item.fotos || []).findIndex(f => f.tipo === tipoFoto && !f.arquivada);
+    if (jaTem >= 0) { STORE.delFotoSync(item.fotos[jaTem].id); item.fotos.splice(jaTem, 1); }
+    item.fotos.push({ id: fileId, tipo: tipoFoto, bytes });
+  }
+  salvarRascunho(true);
+  renderApp();
+}
+
+function carregarThumbs() {
+  $$('img[data-foto-id]').forEach(async img => {
+    const b64 = await STORE.pullPhoto(img.dataset.fotoId);
+    if (b64) img.src = b64;
+    if (!img._ligadoLightbox) {
+      img._ligadoLightbox = true;
+      img.style.cursor = 'zoom-in';
+      img.onclick = () => abrirLightbox([{ id: img.dataset.fotoId, legenda: img.alt || 'Foto' }], 0);
+    }
+  });
+}
+
+function usarLocalizacao() {
+  const status = $('#gps-status');
+  if (!navigator.geolocation) { toast('Este aparelho não liberou o GPS', 'erro'); return; }
+  if (status) status.textContent = 'Pegando sua localização…';
+  navigator.geolocation.getCurrentPosition(async pos => {
+    const { latitude, longitude } = pos.coords;
+    BRIEF.geo = { lat: latitude, lng: longitude };
+    let endereco = '';
+    try {
+      const ctrl = new AbortController();
+      const timer = setTimeout(() => ctrl.abort(), 8000);
+      const r = await fetch('https://nominatim.openstreetmap.org/reverse?format=jsonv2&accept-language=pt-BR&lat=' + latitude + '&lon=' + longitude, { signal: ctrl.signal });
+      clearTimeout(timer);
+      const d = await r.json();
+      if (d && d.address) {
+        const a = d.address;
+        endereco = [
+          [a.road, a.house_number].filter(Boolean).join(', '),
+          a.suburb || a.neighbourhood,
+          a.city || a.town || a.village,
+          a.postcode ? 'CEP ' + a.postcode : ''
+        ].filter(Boolean).join(' - ');
+      }
+      if (!endereco && d && d.display_name) endereco = d.display_name;
+    } catch {}
+    if (!endereco) endereco = 'Lat ' + latitude.toFixed(6) + ', Long ' + longitude.toFixed(6) + ' (sem internet pro endereço, complete a mão)';
+    BRIEF.endereco = endereco;
+    const campo = $('#c-endereco');
+    if (campo) campo.value = endereco;
+    if (status) status.textContent = 'Localização preenchida ✓';
+    salvarRascunho(true);
+  }, err => {
+    if (status) status.textContent = '';
+    toast('Não consegui a localização: ' + (err && err.message ? err.message : 'sem permissão'), 'erro');
+  }, { enableHighAccuracy: true, timeout: 12000, maximumAge: 30000 });
+}
+
+async function buscarOS(botao) {
+  const numero = String(BRIEF.osNumero || '').trim();
+  const alvo = $('#os-resultado');
+  if (!numero) { if (alvo) alvo.innerHTML = '<div class="aviso amarelo">Digite o número da O.S. primeiro, ou marque "Sem O.S. por enquanto".</div>'; return; }
+  botao.disabled = true; botao.textContent = 'Buscando…';
+  try {
+    const res = await STORE.apiFn('mubisys', { action: 'buscarOS', numero });
+    if (res && res.encontrado && res.os) {
+      const os = res.os;
+      if (!BRIEF.cliente && os.cliente) BRIEF.cliente = os.cliente;
+      if (!BRIEF.responsavel && os.contato && os.contato !== os.cliente) BRIEF.responsavel = os.contato;
+      if (!BRIEF.telefone && os.telefone) BRIEF.telefone = mascaraTel(os.telefone);
+      if (!BRIEF.endereco && os.endereco) BRIEF.endereco = os.endereco;
+      BRIEF.osOrigem = res.origem;
+      BRIEF.osServico = os.servico || '';
+      BRIEF.semOS = false;
+      salvarRascunho(true);
+      toast('O.S. encontrada, dados preenchidos ✓', 'sucesso');
+      renderApp();
+    } else {
+      if (alvo) alvo.innerHTML = '<div class="aviso amarelo">O.S. não encontrada' +
+        (res && res.fontes && !res.fontes.mubisys && !res.fontes.pcp ? ' (integração ainda não configurada)' : '') +
+        '. Digite os dados do cliente manualmente, o briefing segue normal.</div>';
+      BRIEF.osOrigem = '';
+      salvarRascunho();
+    }
+  } catch {
+    if (alvo) alvo.innerHTML = '<div class="aviso amarelo">Sem conexão agora. Digite os dados manualmente, dá pra vincular a O.S. depois.</div>';
+  } finally {
+    botao.disabled = false; botao.textContent = 'Buscar';
+  }
+}
+
+function enviarBriefing() {
+  const p = pendencias(BRIEF);
+  if (p.length) { toast('Ainda falta: ' + p[0], 'erro'); return; }
+  const concluir = () => {
+    BRIEF.situacao = 'enviado';
+    BRIEF.status = BRIEF.tipoMedicao === 'Execução' ? 'Aprovado pra execução' : 'Aguardando orçamento';
+    BRIEF.enviadoEm = new Date().toISOString();
+    BRIEF.semOS = !String(BRIEF.osNumero || '').trim();
+    salvarRascunho(true);
+    const id = BRIEF.id;
+    BRIEF = null;
+    toast('Briefing enviado pro design ✓ (sincroniza sozinho quando tiver sinal)', 'sucesso');
+    location.hash = '#/b/' + id;
+  };
+  if (BRIEF.tipoMedicao === 'Execução') {
+    confirmar('Medição de execução', 'Estas medidas vão pra produção. <b>Conferiu duas vezes?</b>', 'Sim, enviar', concluir);
+  } else {
+    concluir();
+  }
+}
+
+/* ══════════════════ Detalhe ══════════════════ */
+
+function renderDetalhe(app) {
+  const b = STORE.getOS(ROTA.id);
+  if (!b) { toast('Briefing não encontrado neste aparelho. Sincronize e tente de novo.', 'erro'); location.hash = '#/'; return; }
+  document.title = (b.cliente || 'Briefing') + ' · Brief de Medição';
+  const podeGerir = SESSAO.papel === 'designer' || SESSAO.papel === 'admin';
+  const meu = b.vendedorUsuario === SESSAO.usuario;
+  const semOS = !String(b.osNumero || '').trim();
+  const o = b.obsGerais || {};
+
+  const linha = (dt, dd) => dd ? '<div class="dupla-dado"><dt>' + dt + '</dt><dd>' + dd + '</dd></div>' : '';
+
+  app.innerHTML =
+    htmlTopo(b.cliente || 'Briefing') +
+    '<main class="miolo">' +
+    '<div class="titulo-pagina"><a href="#/" style="text-decoration:none">←</a> ' + esc(b.cliente || 'Briefing') +
+    '<span class="badges">' +
+    (b.situacao !== 'enviado' ? '<span class="badge rascunho">RASCUNHO</span>' : badgeStatus(b.status)) +
+    (b.tipoMedicao ? '<span class="badge ' + (b.tipoMedicao === 'Execução' ? 'tipo-execucao' : 'tipo-orcamento') + '">' + esc(b.tipoMedicao) + '</span>' : '') +
+    (semOS ? '<span class="badge sem-os">SEM O.S.</span>' : '<span class="badge neutro">O.S. ' + esc(b.osNumero) + '</span>') +
+    '</span></div>' +
+
+    (b.apagadoEm ? '<div class="aviso vermelho">Este briefing está na lixeira desde ' + fmtDataHora(b.apagadoEm) + '.</div>' : '') +
+
+    // Ações
+    '<div class="card"><div class="sub-secao">Ações</div>' +
+    '<div style="display:flex; flex-wrap:wrap; gap:8px">' +
+    '<button class="botao mini" id="btn-pdf-brief">📄 PDF do briefing</button>' +
+    '<button class="botao mini fantasma" id="btn-ficha-det">🖨 Ficha de visita (PDF)</button>' +
+    (podeGerir || meu ? '<button class="botao mini suave" id="btn-vincular-os">' + (semOS ? '🔗 Vincular O.S.' : '🔗 Trocar O.S.') + '</button>' : '') +
+    (SESSAO.papel === 'admin' && !b.apagadoEm ? '<button class="botao mini perigo" id="btn-lixeira">🗑 Mover pra lixeira</button>' : '') +
+    '</div>' +
+    (podeGerir && b.situacao === 'enviado'
+      ? '<div class="campo" style="margin-top:12px; max-width:340px"><label>Status</label><select id="sel-status">' +
+        STATUS_LISTA.map(s => '<option ' + (b.status === s ? 'selected' : '') + '>' + esc(s) + '</option>').join('') + '</select></div>'
+      : '') +
+    '</div>' +
+
+    // Dados
+    '<div class="card"><div class="sub-secao">Cliente e visita</div><dl>' +
+    linha('Cliente', esc(b.cliente)) +
+    linha('Responsável', esc(b.responsavel)) +
+    linha('Telefone', b.telefone ? '<a href="tel:' + esc(b.telefone.replace(/\D/g, '')) + '">' + esc(b.telefone) + '</a>' : '') +
+    linha('Como conheceu', esc(b.comoConheceu)) +
+    linha('Data da visita', fmtDataHora(b.dataHora)) +
+    linha('Vendedor', esc(b.vendedor)) +
+    linha('Quem mediu', esc(b.quemMediu)) +
+    linha('Natureza', esc(b.naturezaServico)) +
+    linha('Ambiente', esc(b.ambiente)) +
+    linha('Serviço da O.S.', esc(b.osServico)) +
+    linha('Enviado em', b.enviadoEm ? fmtDataHora(b.enviadoEm) : '') +
+    '</dl></div>' +
+
+    '<div class="card"><div class="sub-secao">Local</div><dl>' +
+    linha('Endereço', esc(b.endereco)) +
+    linha('Estabelecimento', esc(b.estabelecimento)) +
+    linha('Referência', esc(b.pontoReferencia)) +
+    (b.geo ? linha('GPS', '<a target="_blank" rel="noopener" href="https://www.google.com/maps?q=' + b.geo.lat + ',' + b.geo.lng + '">abrir no mapa</a>') : '') +
+    '</dl></div>' +
+
+    // Itens
+    (b.itens || []).map((it, i) =>
+      '<div class="card"><div class="cabeca" style="display:flex; justify-content:space-between; align-items:center; gap:8px; margin-bottom:8px">' +
+      '<h3 class="fonte-titulo" style="color:var(--indigo-escuro)">Item ' + (i + 1) + ': ' + esc(nomeItem(it) || 'sem nome') + '</h3>' +
+      '<button class="botao mini suave" data-pdf-item="' + it.id + '">📄 PDF do item</button></div>' +
+      (it.detalheServico ? '<p class="dica-campo" style="margin-bottom:8px">' + esc(it.detalheServico) + '</p>' : '') +
+      '<table class="tabela"><tr><th>Medida</th><th>Largura</th><th>Altura</th><th>Área</th></tr>' +
+      (it.medidas || []).map((m, mi) =>
+        '<tr><td>' + (it.medidas.length > 1 ? 'Ponto ' + (mi + 1) : 'Principal') + '</td>' +
+        '<td>' + esc(m.largura || '?') + ' cm</td><td>' + esc(m.altura || '?') + ' cm</td>' +
+        '<td>' + (areaPar(m) > 0 ? fmtM2(areaPar(m)) : '') + '</td></tr>'
+      ).join('') +
+      (it.medidas && it.medidas.length > 1 ? '<tr><td colspan="3"><b>Soma das áreas</b></td><td><b>' + fmtM2(areaItem(it)) + '</b></td></tr>' : '') +
+      '</table>' +
+      '<dl style="margin-top:8px">' +
+      linha('Altura de instalação', it.alturaInstalacao ? esc(it.alturaInstalacao) + ' cm do chão até a base' : '') +
+      linha('Superfícies', esc((it.superficies || []).join(', ') + (it.superficieOutra ? ' (' + it.superficieOutra + ')' : ''))) +
+      linha('Observação', esc(it.obs)) +
+      '</dl>' +
+      '<div class="grade-galeria" style="margin-top:10px" data-galeria-item="' + it.id + '">' +
+      (it.fotos || []).map((f, fi) => {
+        const def = FOTOS_ITEM.find(d => d.tipo === f.tipo);
+        if (f.arquivada) return '<figure><div class="slot-foto" style="height:110px; display:flex; align-items:center; justify-content:center; font-size:.72rem; color:var(--cinza)">Foto removida na limpeza</div><figcaption>' + esc(def ? def.rotulo : f.tipo) + '</figcaption></figure>';
+        return '<figure><img data-foto-idx="' + fi + '" data-foto-id="' + esc(f.id) + '" alt="' + esc(def ? def.rotulo : 'Foto') + '"><figcaption>' + esc(def ? def.rotulo : f.tipo) + '</figcaption></figure>';
+      }).join('') +
+      '</div></div>'
+    ).join('') +
+
+    // Croquis
+    ((b.croquis || []).length
+      ? '<div class="card"><div class="sub-secao">Desenhos da visita (croquis)</div>' +
+        '<div class="grade-galeria" data-galeria-croquis>' +
+        b.croquis.map((c, ci) => c.arquivada
+          ? '<figure><div class="slot-foto" style="height:110px; display:flex; align-items:center; justify-content:center; font-size:.72rem; color:var(--cinza)">Removido na limpeza</div></figure>'
+          : '<figure><img data-croqui-idx="' + ci + '" data-foto-id="' + esc(c.id) + '" alt="Desenho ' + (ci + 1) + '"><figcaption>Desenho ' + (ci + 1) + '</figcaption></figure>'
+        ).join('') + '</div></div>'
+      : '') +
+
+    // Observações gerais
+    '<div class="card"><div class="sub-secao">Observações gerais</div><dl>' +
+    linha('Energia próxima', o.energia === 'sim' ? 'Sim' + (o.energiaOnde ? ' (' + esc(o.energiaOnde) + ')' : '') + (o.voltagem ? ' · ' + esc(o.voltagem) : '') : o.energia === 'nao' ? 'Não' : '') +
+    linha('Obstáculos', esc(((o.obstaculos || []).join(', ')) + (o.obstaculoOutro ? ' (' + o.obstaculoOutro + ')' : ''))) +
+    linha('Equipamento', o.equipamento ? esc(o.equipamento + (o.equipamentoDetalhe ? ' (' + o.equipamentoDetalhe + ')' : '')) : '') +
+    linha('Ponto', esc(o.pontoTipo)) +
+    linha('Serviços extras', esc((o.servicosExtras || []).join(', '))) +
+    linha('Prazo desejado', esc(o.prazo)) +
+    linha('Briefing do cliente', esc(o.briefingCliente)) +
+    linha('Arte em alta', esc(o.arteAlta)) +
+    linha('Projeto 3D', esc(o.projeto3D)) +
+    linha('Budget', esc(o.budget)) +
+    linha('Pagamento', esc(o.formaPagamento)) +
+    linha('Equipe estimada', esc(o.equipeInstalacao)) +
+    linha('Tempo de execução', esc(o.tempoExecucao)) +
+    '</dl></div>' +
+
+    '<p class="dica-campo" style="text-align:center">Criado por ' + esc(b.criadoPor) + ' em ' + fmtDataHora(b.criadoEm) +
+    ' · Última alteração: ' + esc(b.atualizadoPor || '') + ' em ' + fmtDataHora(b.atualizadoEm) + '</p>' +
+    '</main>';
+
+  ligarTopo();
+
+  // Galerias com navegação
+  (b.itens || []).forEach(it => {
+    const cont = $('[data-galeria-item="' + it.id + '"]');
+    if (!cont) return;
+    const fotosVivas = (it.fotos || []).filter(f => !f.arquivada).map(f => {
+      const def = FOTOS_ITEM.find(d => d.tipo === f.tipo);
+      return { id: f.id, legenda: (nomeItem(it) || 'Item') + ' · ' + (def ? def.rotulo : f.tipo) };
+    });
+    $$('img[data-foto-id]', cont).forEach((img, pos) => {
+      STORE.pullPhoto(img.dataset.fotoId).then(b64 => { if (b64) img.src = b64; });
+      img.onclick = () => abrirLightbox(fotosVivas, fotosVivas.findIndex(x => x.id === img.dataset.fotoId));
+    });
+  });
+  const gcro = $('[data-galeria-croquis]');
+  if (gcro) {
+    const vivos = (b.croquis || []).filter(c => !c.arquivada).map((c, i) => ({ id: c.id, legenda: 'Desenho da visita' }));
+    $$('img[data-foto-id]', gcro).forEach(img => {
+      STORE.pullPhoto(img.dataset.fotoId).then(b64 => { if (b64) img.src = b64; });
+      img.onclick = () => abrirLightbox(vivos, vivos.findIndex(x => x.id === img.dataset.fotoId));
+    });
+  }
+
+  // Ações
+  $('#btn-pdf-brief').onclick = () => exportarPdfBriefing(b);
+  $('#btn-ficha-det').onclick = () => exportarFichaVisita(b);
+  $$('[data-pdf-item]').forEach(bt => bt.onclick = () => {
+    const item = (b.itens || []).find(i => i.id === bt.dataset.pdfItem);
+    if (item) exportarPdfItem(b, item);
+  });
+  const sel = $('#sel-status');
+  if (sel) sel.onchange = () => {
+    b.status = sel.value;
+    b.atualizadoEm = new Date().toISOString();
+    b.atualizadoPor = SESSAO.nome;
+    STORE.saveOS(JSON.parse(JSON.stringify(b)));
+    toast('Status: ' + b.status, 'sucesso');
+    renderApp();
+  };
+  const vinc = $('#btn-vincular-os');
+  if (vinc) vinc.onclick = () => abrirVincularOS(b);
+  const lix = $('#btn-lixeira');
+  if (lix) lix.onclick = () => confirmar('Mover pra lixeira',
+    'O briefing sai das listas e fica 30 dias recuperável na lixeira do admin. Depois disso é apagado de vez.', 'Mover', () => {
+      b.apagadoEm = new Date().toISOString();
+      b.apagadoPor = SESSAO.nome;
+      b.atualizadoEm = new Date().toISOString();
+      b.atualizadoPor = SESSAO.nome;
+      STORE.saveOS(JSON.parse(JSON.stringify(b)));
+      toast('Movido pra lixeira');
+      location.hash = '#/';
+    }, true);
+}
+
+function abrirVincularOS(b) {
+  const m = abrirModal(
+    '<h3>Vincular O.S.</h3>' +
+    '<p class="dica-campo">Busca no Mubisys/PCP ou digita direto o número.</p>' +
+    '<div class="campo" style="margin-top:10px"><label>Número da O.S.</label>' +
+    '<input id="v-numero" inputmode="numeric" value="' + esc(b.osNumero || '') + '"></div>' +
+    '<div id="v-resultado"></div>' +
+    '<div class="acoes-modal">' +
+    '<button class="botao suave btn-buscar">Buscar</button>' +
+    '<button class="botao btn-salvar">Salvar número</button></div>'
+  );
+  const salvar = (origem, servico) => {
+    const numero = $('#v-numero', m).value.trim();
+    b.osNumero = numero;
+    b.semOS = !numero;
+    if (origem) b.osOrigem = origem;
+    if (servico) b.osServico = servico;
+    b.atualizadoEm = new Date().toISOString();
+    b.atualizadoPor = SESSAO.nome;
+    STORE.saveOS(JSON.parse(JSON.stringify(b)));
+    m.remove();
+    toast(numero ? 'O.S. ' + numero + ' vinculada ✓' : 'Número removido', 'sucesso');
+    renderApp();
+  };
+  $('.btn-buscar', m).onclick = async () => {
+    const numero = $('#v-numero', m).value.trim();
+    const alvo = $('#v-resultado', m);
+    if (!numero) { alvo.innerHTML = '<div class="aviso amarelo">Digite o número.</div>'; return; }
+    alvo.innerHTML = '<div class="aviso indigo">Buscando…</div>';
+    try {
+      const res = await STORE.apiFn('mubisys', { action: 'buscarOS', numero });
+      if (res && res.encontrado) {
+        alvo.innerHTML = '<div class="aviso verde">Achei: ' + esc(res.os.cliente || '') + (res.os.servico ? ' · ' + esc(res.os.servico) : '') + '</div>';
+        $('.btn-salvar', m).onclick = () => salvar(res.origem, res.os.servico || '');
+      } else {
+        alvo.innerHTML = '<div class="aviso amarelo">Não achei essa O.S. Dá pra salvar o número mesmo assim.</div>';
+      }
+    } catch {
+      alvo.innerHTML = '<div class="aviso amarelo">Sem conexão. Dá pra salvar o número mesmo assim.</div>';
+    }
+  };
+  $('.btn-salvar', m).onclick = () => salvar('manual', '');
+}
+
+/* ══════════════════ Admin ══════════════════ */
+
+const ABAS_ADMIN = [
+  { id: 'usuarios', nome: 'Usuários' },
+  { id: 'arquivos', nome: 'Arquivos e lixeira' },
+  { id: 'armazenamento', nome: 'Armazenamento' },
+  { id: 'config', nome: 'Configurações' },
+  { id: 'log', nome: 'Log' },
+  { id: 'integracao', nome: 'Mubisys' }
+];
+
+function renderAdmin(app) {
+  if (SESSAO.papel !== 'admin') { location.hash = '#/'; return; }
+  document.title = 'Painel de controle · Brief de Medição';
+  const aba = ROTA.aba || 'usuarios';
+  app.innerHTML =
+    htmlTopo('Painel de controle') +
+    '<main class="miolo">' +
+    '<div class="abas">' +
+    ABAS_ADMIN.map(a => '<button class="aba ' + (a.id === aba ? 'ativa' : '') + '" data-aba="' + a.id + '">' + a.nome + '</button>').join('') +
+    '</div>' +
+    '<div id="conteudo-admin"><div class="vazio">Carregando…</div></div>' +
+    '</main>';
+  ligarTopo();
+  $$('.aba[data-aba]').forEach(bt => bt.onclick = () => { location.hash = '#/admin/' + bt.dataset.aba; });
+  const alvo = $('#conteudo-admin');
+  if (aba === 'usuarios') adminUsuarios(alvo);
+  else if (aba === 'arquivos') adminArquivos(alvo);
+  else if (aba === 'armazenamento') adminArmazenamento(alvo);
+  else if (aba === 'config') adminConfig(alvo);
+  else if (aba === 'log') adminLog(alvo);
+  else if (aba === 'integracao') adminIntegracao(alvo);
+}
+
+function adminUsuarios(alvo) {
+  const cfg = STORE.getCFG();
+  const usuarios = cfg.usuarios || [];
+  alvo.innerHTML =
+    '<div class="card"><div class="sub-secao">Equipe (' + usuarios.length + ')</div>' +
+    '<table class="tabela"><tr><th>Nome</th><th>Usuário</th><th>Perfil</th><th>Situação</th><th></th></tr>' +
+    usuarios.map((u, i) =>
+      '<tr><td>' + esc(u.nome) + '</td><td>' + esc(u.usuario) + '</td><td>' + esc(u.papel) + '</td>' +
+      '<td>' + (u.ativo === false ? '<span class="badge rascunho">desativado</span>' : '<span class="badge status-concluido">ativo</span>') + '</td>' +
+      '<td style="white-space:nowrap"><button class="botao mini suave" data-editar="' + i + '">Editar</button></td></tr>'
+    ).join('') + '</table>' +
+    '<button class="botao" id="btn-novo-usuario" style="margin-top:12px">➕ Novo usuário</button></div>';
+
+  const formUsuario = (u, idx) => {
+    const m = abrirModal(
+      '<h3>' + (u ? 'Editar usuário' : 'Novo usuário') + '</h3>' +
+      '<div class="campo"><label>Nome</label><input id="u-nome" value="' + esc(u ? u.nome : '') + '"></div>' +
+      '<div class="campo"><label>Usuário (login)</label><input id="u-usuario" autocapitalize="none" value="' + esc(u ? u.usuario : '') + '"' + (u ? ' disabled' : '') + '></div>' +
+      '<div class="campo"><label>Perfil</label><select id="u-papel">' +
+      ['vendedor', 'designer', 'admin'].map(p => '<option ' + (u && u.papel === p ? 'selected' : '') + '>' + p + '</option>').join('') + '</select></div>' +
+      '<div class="campo"><label>' + (u ? 'Nova senha (deixe em branco pra manter)' : 'Senha') + '</label><input id="u-senha" type="text" autocomplete="off"></div>' +
+      (u ? '<div class="campo"><label class="chip ' + (u.ativo !== false ? 'marcado' : '') + '" id="u-ativo">Usuário ativo</label></div>' : '') +
+      '<div class="acoes-modal"><button class="botao fantasma btn-cancelar">Cancelar</button><button class="botao btn-salvar">Salvar</button></div>'
+    );
+    let ativo = !u || u.ativo !== false;
+    const chipAtivo = $('#u-ativo', m);
+    if (chipAtivo) chipAtivo.onclick = () => { ativo = !ativo; chipAtivo.classList.toggle('marcado', ativo); };
+    $('.btn-cancelar', m).onclick = () => m.remove();
+    $('.btn-salvar', m).onclick = () => {
+      const nome = $('#u-nome', m).value.trim();
+      const usuario = $('#u-usuario', m).value.trim().toLowerCase();
+      const papel = $('#u-papel', m).value;
+      const senha = $('#u-senha', m).value;
+      if (!nome || !usuario || (!u && !senha)) { toast('Preencha nome, usuário e senha', 'erro'); return; }
+      const cfg2 = STORE.getCFG();
+      cfg2.usuarios = cfg2.usuarios || [];
+      const adminsAtivos = cfg2.usuarios.filter(x => x.papel === 'admin' && x.ativo !== false);
+      if (u) {
+        const alvoU = cfg2.usuarios[idx];
+        if (alvoU.papel === 'admin' && adminsAtivos.length === 1 && adminsAtivos[0].usuario === alvoU.usuario && (papel !== 'admin' || !ativo)) {
+          toast('Este é o único admin ativo. Crie outro admin antes de mudar este.', 'erro'); return;
+        }
+        alvoU.nome = nome; alvoU.papel = papel; alvoU.ativo = ativo;
+        if (senha) alvoU.senha = senha;
+      } else {
+        if (cfg2.usuarios.some(x => norm(x.usuario) === norm(usuario))) { toast('Já existe um usuário com esse login', 'erro'); return; }
+        cfg2.usuarios.push({ id: 'u-' + STORE.uuid().slice(0, 8), nome, usuario, senha, papel, ativo: true });
+      }
+      STORE.saveCFG(cfg2, SESSAO.nome);
+      m.remove();
+      toast('Usuário salvo ✓', 'sucesso');
+      renderApp();
+    };
+  };
+  $('#btn-novo-usuario').onclick = () => formUsuario(null);
+  $$('[data-editar]', alvo).forEach(bt => bt.onclick = () => formUsuario(usuarios[Number(bt.dataset.editar)], Number(bt.dataset.editar)));
+}
+
+function adminArquivos(alvo) {
+  const lixeira = STORE.getAllOS().filter(b => b && b.apagadoEm)
+    .sort((a, z) => String(z.apagadoEm).localeCompare(String(a.apagadoEm)));
+  alvo.innerHTML =
+    '<div class="card"><div class="sub-secao">Lixeira (' + lixeira.length + ')</div>' +
+    '<p class="dica-campo" style="margin-bottom:10px">Item apagado fica 30 dias recuperável. A limpeza automática roda todo dia.</p>' +
+    (lixeira.length
+      ? lixeira.map(b => {
+          const dias = Math.max(0, 30 - Math.floor((Date.now() - new Date(b.apagadoEm).getTime()) / 86400000));
+          return '<div class="resumo-item" style="display:flex; justify-content:space-between; align-items:center; gap:10px; flex-wrap:wrap">' +
+            '<div><b>' + esc(b.cliente || 'Sem nome') + '</b><div class="dica-campo">apagado por ' + esc(b.apagadoPor || '?') + ' em ' + fmtDataHora(b.apagadoEm) + ' · some em ' + dias + ' dia(s)</div></div>' +
+            '<div style="display:flex; gap:6px"><button class="botao mini suave" data-restaurar="' + b.id + '">Restaurar</button>' +
+            '<button class="botao mini perigo" data-excluir="' + b.id + '">Excluir de vez</button></div></div>';
+        }).join('')
+      : '<div class="vazio">Lixeira vazia.</div>') +
+    '</div>' +
+    '<div class="card"><div class="sub-secao">Limpeza em lote de fotos</div>' +
+    '<p class="dica-campo" style="margin-bottom:10px">Apaga só as FOTOS de briefings CONCLUÍDOS antigos. Os dados e o PDF (sem fotos) continuam. Exporte os PDFs importantes antes.</p>' +
+    '<div class="linha-2" style="align-items:end"><div class="campo" style="margin:0"><label>Concluídos há mais de (meses)</label>' +
+    '<input id="lm-meses" inputmode="numeric" value="6"></div>' +
+    '<button class="botao perigo" id="btn-limpeza">Executar limpeza</button></div>' +
+    '<div id="lm-resultado"></div></div>' +
+    '<div class="card"><div class="sub-secao">Backup deste aparelho</div>' +
+    '<div style="display:flex; gap:8px; flex-wrap:wrap">' +
+    '<button class="botao mini suave" id="btn-backup">⬇️ Exportar backup (JSON)</button>' +
+    '<label class="botao mini fantasma" style="cursor:pointer">⬆️ Importar backup<input type="file" id="input-backup" accept="application/json" hidden></label>' +
+    '</div></div>';
+
+  $$('[data-restaurar]', alvo).forEach(bt => bt.onclick = () => {
+    const b = STORE.getOS(bt.dataset.restaurar);
+    if (!b) return;
+    b.apagadoEm = null; b.apagadoPor = '';
+    b.atualizadoEm = new Date().toISOString(); b.atualizadoPor = SESSAO.nome;
+    STORE.saveOS(JSON.parse(JSON.stringify(b)));
+    toast('Restaurado ✓', 'sucesso');
+    renderApp();
+  });
+  $$('[data-excluir]', alvo).forEach(bt => bt.onclick = () => {
+    const b = STORE.getOS(bt.dataset.excluir);
+    if (!b) return;
+    confirmar('Excluir DE VEZ', 'Briefing de <b>' + esc(b.cliente || 'sem nome') + '</b>: apaga registro e fotos do servidor e de todos os aparelhos. Não tem volta.', 'Continuar', () => {
+      confirmar('Confirmação dupla', 'Última chance: excluir definitivamente?', 'Excluir de vez', () => {
+        STORE.deleteOS(b.id, SESSAO.nome);
+        toast('Excluído definitivamente');
+        renderApp();
+      }, true);
+    }, true);
+  });
+  $('#btn-limpeza').onclick = () => {
+    const meses = Math.max(1, Number($('#lm-meses').value) || 6);
+    confirmar('Limpeza em lote', 'Apagar as fotos de todos os briefings CONCLUÍDOS há mais de <b>' + meses + ' meses</b>? Os dados continuam, as fotos não voltam.', 'Executar', async () => {
+      const alvoR = $('#lm-resultado');
+      alvoR.innerHTML = '<div class="aviso indigo">Executando…</div>';
+      try {
+        const r = await STORE.api({ action: 'limpezaFotos', meses, _quem: SESSAO.nome });
+        alvoR.innerHTML = '<div class="aviso verde">Pronto: ' + r.fotosApagadas + ' foto(s) de ' + r.briefingsLimpos + ' briefing(s), ' + fmtBytes(r.bytesLiberados) + ' liberados.</div>';
+        STORE.pull(() => {});
+      } catch (e) {
+        alvoR.innerHTML = '<div class="aviso vermelho">Não deu: ' + esc(e.message) + '</div>';
+      }
+    }, true);
+  };
+  $('#btn-backup').onclick = () => {
+    const dados = STORE.exportarBackup();
+    const blob = new Blob([JSON.stringify(dados, null, 2)], { type: 'application/json' });
+    const a = document.createElement('a');
+    a.href = URL.createObjectURL(blob);
+    a.download = 'backup-brief-' + diaLocal(new Date().toISOString()) + '.json';
+    a.click();
+    setTimeout(() => URL.revokeObjectURL(a.href), 5000);
+  };
+  $('#input-backup').onchange = e => {
+    const f = e.target.files && e.target.files[0];
+    if (!f) return;
+    const leitor = new FileReader();
+    leitor.onload = () => {
+      try {
+        STORE.importarBackup(JSON.parse(leitor.result));
+        toast('Backup importado ✓', 'sucesso');
+        renderApp();
+      } catch (err) { toast('Arquivo inválido: ' + err.message, 'erro'); }
+    };
+    leitor.readAsText(f);
+  };
+}
+
+async function adminArmazenamento(alvo) {
+  alvo.innerHTML = '<div class="vazio">Calculando armazenamento…</div>';
+  let d;
+  try { d = await STORE.api({ action: 'armazenamento' }); }
+  catch (e) { alvo.innerHTML = '<div class="aviso vermelho">Sem conexão com o servidor agora.</div>'; return; }
+  const totalGeral = d.banco.bytes + d.fotos.bytes;
+  const maxMes = Math.max(1, ...d.porMes.map(m => m.bytes));
+  alvo.innerHTML =
+    '<div class="card"><div class="sub-secao">Total no Supabase da casa (Netlify Blobs)</div>' +
+    '<div class="cards-numeros">' +
+    '<div class="numero-grande"><div class="valor">' + fmtBytes(totalGeral) + '</div><div class="nome">Total geral</div></div>' +
+    '<div class="numero-grande"><div class="valor">' + fmtBytes(d.banco.bytes) + '</div><div class="nome">Banco (' + d.banco.registros + ' briefings)</div></div>' +
+    '<div class="numero-grande"><div class="valor">' + fmtBytes(d.fotos.bytes) + '</div><div class="nome">Fotos (' + d.fotos.quantidade + ')</div></div>' +
+    '<div class="numero-grande"><div class="valor">' + d.lixeira + '</div><div class="nome">Na lixeira</div></div>' +
+    '</div>' +
+    (d.fotos.blobsNoServidor !== d.fotos.quantidade
+      ? '<p class="dica-campo" style="margin-top:8px">No servidor existem ' + d.fotos.blobsNoServidor + ' arquivos de foto (inclui fotos em trânsito ou órfãs).</p>'
+      : '') +
+    '</div>' +
+    '<div class="card"><div class="sub-secao">Crescimento por mês</div>' +
+    '<div class="grafico-meses">' +
+    d.porMes.slice(-12).map(m =>
+      '<div class="coluna"><div class="barra-mes" style="height:' + Math.max(3, Math.round(m.bytes / maxMes * 120)) + 'px" title="' + fmtBytes(m.bytes) + '"></div>' +
+      '<div class="rotulo-mes">' + esc(m.mes.slice(2)) + '</div></div>'
+    ).join('') +
+    '</div></div>' +
+    '<div class="card"><div class="sub-secao">Briefings que mais ocupam espaço</div>' +
+    '<table class="tabela"><tr><th>Cliente</th><th>Status</th><th>Tamanho</th></tr>' +
+    d.maiores.map(m =>
+      '<tr><td><a href="#/b/' + m.id + '">' + esc(m.cliente) + '</a>' + (m.naLixeira ? ' 🗑' : '') + '</td>' +
+      '<td>' + esc(m.status || '') + '</td><td>' + fmtBytes(m.bytes) + '</td></tr>'
+    ).join('') + '</table></div>';
+}
+
+function adminConfig(alvo) {
+  const cfg = STORE.getCFG();
+  alvo.innerHTML =
+    '<div class="card"><div class="sub-secao">Dicas por superfície</div>' +
+    (cfg.superficies || []).filter(s => s !== 'Outro').map(s =>
+      '<div class="campo"><label>' + esc(s) + '</label>' +
+      '<textarea rows="2" data-dica="' + esc(s) + '">' + esc((cfg.dicas || {})[s] || '') + '</textarea></div>'
+    ).join('') + '</div>' +
+    '<div class="card"><div class="sub-secao">Listas</div>' +
+    '<div class="campo"><label>Tipos de item (um por linha)</label>' +
+    '<textarea rows="6" id="cf-tipos">' + esc((cfg.tiposItem || []).join('\n')) + '</textarea></div>' +
+    '<div class="campo"><label>Superfícies (uma por linha)</label>' +
+    '<textarea rows="6" id="cf-superficies">' + esc((cfg.superficies || []).join('\n')) + '</textarea></div>' +
+    '</div>' +
+    '<div class="card"><div class="sub-secao">Webhook de notificação (n8n)</div>' +
+    '<p class="dica-campo" style="margin-bottom:8px">Quando um briefing é enviado pro design, o servidor chama esta URL na hora. Cole aqui a URL do webhook do n8n.</p>' +
+    '<div class="campo"><label>URL do webhook</label><input id="cf-webhook" type="text" placeholder="https://…" value="' + esc(cfg.webhookUrl || '') + '"></div>' +
+    '<button class="botao mini suave" id="btn-testar-webhook">Disparar teste</button>' +
+    '<span id="webhook-resultado" class="dica-campo" style="margin-left:8px"></span>' +
+    '</div>' +
+    '<button class="botao largo" id="btn-salvar-config">Salvar configurações</button>';
+
+  $('#btn-testar-webhook').onclick = async () => {
+    const url = $('#cf-webhook').value.trim();
+    const r$ = $('#webhook-resultado');
+    if (!url) { r$.textContent = 'Cole a URL primeiro.'; return; }
+    r$.textContent = 'Testando…';
+    try {
+      const r = await STORE.api({ action: 'testarWebhook', url });
+      r$.textContent = r.ok ? 'Chegou lá ✓ (HTTP ' + r.http + ')' : 'Falhou: ' + (r.erro || ('HTTP ' + r.http) || r.motivo);
+    } catch (e) { r$.textContent = 'Falhou: ' + e.message; }
+  };
+  $('#btn-salvar-config').onclick = () => {
+    const cfg2 = STORE.getCFG();
+    cfg2.dicas = cfg2.dicas || {};
+    $$('[data-dica]', alvo).forEach(t => { cfg2.dicas[t.dataset.dica] = t.value.trim(); });
+    const tipos = $('#cf-tipos').value.split('\n').map(s => s.trim()).filter(Boolean);
+    const superficies = $('#cf-superficies').value.split('\n').map(s => s.trim()).filter(Boolean);
+    if (tipos.length) cfg2.tiposItem = tipos;
+    if (superficies.length) cfg2.superficies = superficies;
+    cfg2.webhookUrl = $('#cf-webhook').value.trim();
+    STORE.saveCFG(cfg2, SESSAO.nome);
+    toast('Configurações salvas ✓ (sincronizam pra equipe)', 'sucesso');
+  };
+}
+
+async function adminLog(alvo) {
+  alvo.innerHTML = '<div class="vazio">Carregando o log…</div>';
+  let dados;
+  try { dados = await STORE.api({ action: 'listarLog' }); }
+  catch { alvo.innerHTML = '<div class="aviso vermelho">Sem conexão com o servidor agora.</div>'; return; }
+  const linhas = (logs) => logs.map(l =>
+    '<tr><td style="white-space:nowrap">' + fmtDataHora(l.em) + '</td><td>' + esc(l.quem || '') + '</td>' +
+    '<td>' + esc(l.acao || '') + (l.cliente ? ' · ' + esc(l.cliente) : '') + '</td></tr>'
+  ).join('');
+  alvo.innerHTML =
+    '<div class="card"><div class="sub-secao">Log de atividades (quem fez o quê)</div>' +
+    '<table class="tabela"><tr><th>Quando</th><th>Quem</th><th>Ação</th></tr>' +
+    '<tbody id="log-linhas">' + linhas(dados.logs) + '</tbody></table>' +
+    (dados.nextBefore ? '<button class="botao mini suave" id="btn-mais-log" style="margin-top:10px">Carregar mais</button>' : '') +
+    '<p class="dica-campo" style="margin-top:8px">Entradas com mais de 90 dias são limpas automaticamente.</p></div>';
+  let cursor = dados.nextBefore;
+  const btn = $('#btn-mais-log');
+  if (btn) btn.onclick = async () => {
+    btn.disabled = true;
+    const mais = await STORE.api({ action: 'listarLog', before: cursor }).catch(() => null);
+    if (mais) {
+      $('#log-linhas').insertAdjacentHTML('beforeend', linhas(mais.logs));
+      cursor = mais.nextBefore;
+      if (!cursor) btn.remove(); else btn.disabled = false;
+    } else btn.disabled = false;
+  };
+}
+
+async function adminIntegracao(alvo) {
+  alvo.innerHTML = '<div class="vazio">Consultando…</div>';
+  let st = null;
+  try { st = await STORE.apiFn('mubisys', { action: 'statusConfig' }); } catch {}
+  alvo.innerHTML =
+    '<div class="card"><div class="sub-secao">Busca de O.S.</div>' +
+    (st
+      ? '<dl>' +
+        '<div class="dupla-dado"><dt>Mubisys direto</dt><dd>' + (st.mubisysConfigurado ? '<span class="badge status-concluido">configurado</span>' : '<span class="badge rascunho">não configurado</span>') + '</dd></div>' +
+        '<div class="dupla-dado"><dt>Fallback pelo PCP</dt><dd>' + (st.pcpConfigurado ? '<span class="badge status-concluido">ativo</span>' : '<span class="badge rascunho">inativo</span>') + '</dd></div>' +
+        (st.tokenMascarado ? '<div class="dupla-dado"><dt>Token Mubisys</dt><dd>' + esc(st.tokenMascarado) + '</dd></div>' : '') +
+        '</dl>' +
+        '<p class="dica-campo" style="margin-top:8px">Com o fallback do PCP ativo a busca já funciona hoje. Cadastrar o Mubisys direto deixa a busca em tempo real, sem esperar a importação de hora em hora do PCP.</p>'
+      : '<div class="aviso vermelho">Sem conexão com o servidor agora.</div>') +
+    '</div>' +
+    '<div class="card"><div class="sub-secao">Credenciais do Mubisys (opcional)</div>' +
+    '<div class="campo"><label>Public key</label><input id="mb-public" value="' + esc(st ? st.publicKey || '' : '') + '"></div>' +
+    '<div class="campo"><label>Access token (deixe em branco pra manter o atual)</label><input id="mb-token" type="text" autocomplete="off"></div>' +
+    '<div class="campo"><label>Base da API</label><input id="mb-base" value="' + esc(st ? st.base || '' : 'https://api.mubisys.com/api') + '"></div>' +
+    '<button class="botao" id="btn-salvar-mubisys">Salvar credenciais</button>' +
+    '<span id="mb-resultado" class="dica-campo" style="margin-left:8px"></span></div>';
+  const btn = $('#btn-salvar-mubisys');
+  if (btn) btn.onclick = async () => {
+    const r$ = $('#mb-resultado');
+    r$.textContent = 'Salvando…';
+    try {
+      await STORE.apiFn('mubisys', {
+        action: 'salvarConfig',
+        publicKey: $('#mb-public').value.trim(),
+        accessToken: $('#mb-token').value.trim(),
+        base: $('#mb-base').value.trim()
+      });
+      r$.textContent = 'Salvo ✓';
+      toast('Credenciais salvas ✓', 'sucesso');
+    } catch (e) { r$.textContent = 'Falhou: ' + e.message; }
+  };
+}
+
+/* ══════════════════ PDF (carregamento preguiçoso) ══════════════════ */
+
+let _pdfCarregado = null;
+function ensurePdfLibs() {
+  if (_pdfCarregado) return _pdfCarregado;
+  _pdfCarregado = new Promise((resolve, reject) => {
+    const scripts = ['libs/jspdf.umd.min.js', 'libs/pdf-assets.js', 'pdf.js'];
+    let i = 0;
+    const proximo = () => {
+      if (i >= scripts.length) return resolve();
+      const s = document.createElement('script');
+      s.src = scripts[i++];
+      s.onload = proximo;
+      s.onerror = () => reject(new Error('Falha ao carregar ' + s.src));
+      document.head.appendChild(s);
+    };
+    proximo();
+  });
+  return _pdfCarregado;
+}
+
+async function exportarPdfBriefing(b) {
+  toast('Gerando o PDF do briefing…');
+  try {
+    await ensurePdfLibs();
+    await PDF.briefingCompleto(b);
+    toast('PDF pronto ✓', 'sucesso');
+  } catch (e) { console.error(e); toast('Não consegui gerar o PDF: ' + e.message, 'erro'); }
+}
+
+async function exportarPdfItem(b, item) {
+  toast('Gerando o PDF do item…');
+  try {
+    await ensurePdfLibs();
+    await PDF.itemUnico(b, item);
+    toast('PDF pronto ✓', 'sucesso');
+  } catch (e) { console.error(e); toast('Não consegui gerar o PDF: ' + e.message, 'erro'); }
+}
+
+async function exportarFichaVisita(b) {
+  toast('Gerando a ficha de visita…');
+  try {
+    await ensurePdfLibs();
+    await PDF.fichaVisita(b);
+    toast('Ficha pronta ✓ É só imprimir', 'sucesso');
+  } catch (e) { console.error(e); toast('Não consegui gerar a ficha: ' + e.message, 'erro'); }
+}
+
+/* ══════════════════ Início ══════════════════ */
+
+boot();
