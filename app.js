@@ -1668,7 +1668,7 @@ async function adminArmazenamento(alvo) {
   const totalGeral = d.banco.bytes + d.fotos.bytes;
   const maxMes = Math.max(1, ...d.porMes.map(m => m.bytes));
   alvo.innerHTML =
-    '<div class="card"><div class="sub-secao">Total no Supabase da casa (Netlify Blobs)</div>' +
+    '<div class="card"><div class="sub-secao">Total armazenado na nuvem (Netlify Blobs)</div>' +
     '<div class="cards-numeros">' +
     '<div class="numero-grande"><div class="valor">' + fmtBytes(totalGeral) + '</div><div class="nome">Total geral</div></div>' +
     '<div class="numero-grande"><div class="valor">' + fmtBytes(d.banco.bytes) + '</div><div class="nome">Banco (' + d.banco.registros + ' briefings)</div></div>' +
