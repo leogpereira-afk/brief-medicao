@@ -497,27 +497,51 @@ exports.handler = async (event, context) => {
   }
 };
 
-// Próximo número sequencial do brief. Contador em cfg/seq_brief com piso no
-// maior número já usado nos registros: se o contador se perder ou atrasar,
-// nunca nasce número duplicado (só pode pular). Volume da Impresilk é baixo,
-// então varrer os registros a cada atribuição custa pouco.
+// Próximo número sequencial do brief, à prova de corrida.
+//
+// O contador vive em cfg/seq_brief. Duas Netlify Functions podem rodar ao mesmo
+// tempo (dois vendedores criando brief no mesmo instante): um "lê 1, grava 2" de
+// cada lado geraria número DUPLICADO. Por isso o incremento usa escrita
+// condicional do Netlify Blobs (compare-and-swap por etag): só grava se o etag
+// não mudou desde a leitura; se outro incrementou no meio, relê e tenta de novo.
+// O piso no maior número já existente é rede de segurança caso o contador se perca.
 async function proximoNumeroBrief(osStore) {
-  let ultimo = 0;
   const cfgStore = blobStore('cfg');
-  try {
-    const s = await cfgStore.get('seq_brief', { type: 'json' });
-    if (s && Number(s.ultimo)) ultimo = Number(s.ultimo);
-  } catch {}
+
+  // Piso: maior número já atribuído nos registros (defasado pela consistência
+  // eventual da listagem, mas o contador com etag é a fonte primária).
+  let piso = 0;
   try {
     const keys = await allKeys(osStore);
     const todos = await Promise.all(keys.map(k => osStore.get(k, { type: 'json' }).catch(() => null)));
     for (const b of todos) {
-      if (b && Number(b.numeroBrief) > ultimo) ultimo = Number(b.numeroBrief);
+      if (b && Number(b.numeroBrief) > piso) piso = Number(b.numeroBrief);
     }
   } catch {}
-  const proximo = ultimo + 1;
-  await cfgStore.setJSON('seq_brief', { ultimo: proximo, em: new Date().toISOString() });
-  return proximo;
+
+  for (let tentativa = 0; tentativa < 30; tentativa++) {
+    let atual = 0;
+    let etag = null;
+    try {
+      const meta = await cfgStore.getWithMetadata('seq_brief', { type: 'json' });
+      if (meta) { atual = Number(meta.data && meta.data.ultimo) || 0; etag = meta.etag; }
+    } catch {}
+    const proximo = Math.max(atual, piso) + 1;
+    const opts = etag ? { onlyIfMatch: etag } : { onlyIfNew: true };
+    let res;
+    try {
+      res = await cfgStore.set('seq_brief', JSON.stringify({ ultimo: proximo, em: new Date().toISOString() }), opts);
+    } catch {
+      continue; // conflito de escrita condicional → outra função ganhou; tenta de novo
+    }
+    if (res && res.modified) return proximo; // ganhamos a corrida deste incremento
+    // res.modified === false: etag mudou (ou a chave já existia) → relê e repete
+  }
+
+  // Salvaguarda extrema (não deve acontecer): grava sem condição a partir do piso.
+  const fallback = piso + 1;
+  try { await cfgStore.setJSON('seq_brief', { ultimo: fallback, em: new Date().toISOString() }); } catch {}
+  return fallback;
 }
 
 // Coleta TODAS as chaves do store percorrendo o cursor de paginação do Netlify
