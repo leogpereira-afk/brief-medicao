@@ -12,7 +12,6 @@ const SERVICOS_EXTRAS = [
   'Pintura', 'Lixamento', 'Serviços de solda', 'Troca de lâmpadas', 'Serviço elétrico',
   'Serviço de munk', 'Serviço de terceirizados', 'Cantoneiras', 'Spot', 'Refletor', 'Telhado', 'Calha'
 ];
-const COMO_CONHECEU = ['Google', 'Instagram', 'Facebook', 'Indicação', 'Em instalação', 'Carro', 'Já é cliente', 'Outro'];
 const BUDGETS = ['Até R$1.000', 'R$1.000 a R$5.000', 'R$5.000 a R$10.000', 'Acima de R$10.000'];
 const PAGAMENTOS = ['À vista', 'Cartão de crédito', 'Boleto ou prazo', 'A combinar'];
 const FOTOS_ITEM = [
@@ -92,6 +91,13 @@ function mascaraTel(v) {
   if (d.length <= 6) return '(' + d.slice(0, 2) + ') ' + d.slice(2);
   if (d.length <= 10) return '(' + d.slice(0, 2) + ') ' + d.slice(2, 6) + '-' + d.slice(6);
   return '(' + d.slice(0, 2) + ') ' + d.slice(2, 7) + '-' + d.slice(7);
+}
+
+// Numeração do brief: atribuída pelo SERVIDOR na primeira sincronização
+// (aparelhos offline não têm como combinar números entre si sem conflito).
+function padBrief(n) { return String(n).padStart(4, '0'); }
+function rotuloBrief(b) {
+  return b && b.numeroBrief ? 'Nº ' + padBrief(b.numeroBrief) : 'Nº sai na 1ª sincronização';
 }
 
 function nomeItem(item) {
@@ -239,6 +245,16 @@ STORE.onSync((status, pendentes) => {
   if (chip) {
     chip.className = 'chip-sync ' + status;
     chip.textContent = status === 'ok' ? 'Sincronizado' : status === 'pending' ? pendentes + ' pendente(s)' : 'Offline';
+  }
+  // O servidor atribui o número do brief na primeira sincronização; quando ele
+  // chega, atualiza a tela aberta sem re-renderizar (pra não roubar o foco).
+  if (BRIEF && !BRIEF.numeroBrief) {
+    const atual = STORE.getOS(BRIEF.id);
+    if (atual && atual.numeroBrief) {
+      BRIEF.numeroBrief = atual.numeroBrief;
+      const campo = $('#num-brief-campo');
+      if (campo) campo.value = rotuloBrief(BRIEF);
+    }
   }
 });
 
@@ -414,12 +430,13 @@ function novoBriefing() {
   const agora = new Date().toISOString();
   return {
     id: STORE.uuid(),
+    numeroBrief: null,
     situacao: 'rascunho',
     status: '',
     vendedor: SESSAO.nome,
     vendedorUsuario: SESSAO.usuario,
     osNumero: '', semOS: false, osOrigem: '', osServico: '',
-    cliente: '', responsavel: '', telefone: '', comoConheceu: '',
+    cliente: '', responsavel: '', telefone: '',
     dataHora: agora,
     tipoMedicao: '', naturezaServico: '', ambiente: '',
     quemMediu: SESSAO.nome,
@@ -503,7 +520,9 @@ function filtrarLista(lista) {
   const t = norm(FILTROS.texto);
   const os = FILTROS.os.trim();
   return lista.filter(b => {
-    if (t && !norm((b.cliente || '') + ' ' + (b.estabelecimento || '') + ' ' + (b.responsavel || '')).includes(t)) return false;
+    const alvoBusca = (b.cliente || '') + ' ' + (b.estabelecimento || '') + ' ' + (b.responsavel || '') +
+      (b.numeroBrief ? ' ' + b.numeroBrief + ' ' + padBrief(b.numeroBrief) : '');
+    if (t && !norm(alvoBusca).includes(t)) return false;
     if (os && !String(b.osNumero || '').includes(os)) return false;
     const dia = diaLocal(b.dataHora || b.criadoEm);
     if (FILTROS.de && dia < FILTROS.de) return false;
@@ -581,6 +600,7 @@ function htmlCards(lista) {
       '<div class="meta">' + fmtDataHora(b.dataHora || b.criadoEm) + ' · ' + esc(b.vendedor || '') +
       ' · ' + (b.itens || []).length + ' item(ns)</div>' +
       '<div class="badges">' +
+      (b.numeroBrief ? '<span class="badge neutro">Nº ' + padBrief(b.numeroBrief) + '</span>' : '') +
       (rascunho ? '<span class="badge rascunho">RASCUNHO</span>' : badgeStatus(b.status)) +
       (b.tipoMedicao ? '<span class="badge ' + (b.tipoMedicao === 'Execução' ? 'tipo-execucao' : 'tipo-orcamento') + '">' + esc(b.tipoMedicao) + '</span>' : '') +
       (String(b.osNumero || '').trim() ? '<span class="badge neutro">O.S. ' + esc(b.osNumero) + '</span>' : '<span class="badge sem-os">SEM O.S.</span>') +
@@ -625,7 +645,7 @@ function renderEditor(app) {
   const cfg = STORE.getCFG();
 
   app.innerHTML =
-    htmlTopo(BRIEF.cliente ? 'Briefing: ' + BRIEF.cliente : 'Novo briefing') +
+    htmlTopo((BRIEF.numeroBrief ? 'Nº ' + padBrief(BRIEF.numeroBrief) + ' · ' : '') + (BRIEF.cliente || 'Novo briefing')) +
     '<main class="miolo"><div class="editor-grade">' +
     '<aside class="sidebar-etapas">' +
     ETAPAS_DEF.map(e => '<a href="#" data-etapa="' + e.n + '" class="' + (e.n === ETAPA ? 'ativa' : '') + '">' + e.n + '. ' + e.nome + '</a>').join('') +
@@ -661,8 +681,12 @@ function htmlEtapa1() {
   return (
     '<section class="etapa" data-etapa="1"><div class="card">' +
     '<div class="sub-secao">Etapa 1 · Vendedor</div>' +
+    '<div class="linha-2">' +
     '<div class="campo"><label>Vendedor (preenchido pelo login)</label>' +
     '<input type="text" value="' + esc(BRIEF.vendedor) + '" disabled></div>' +
+    '<div class="campo"><label>Número do brief (automático)</label>' +
+    '<input type="text" id="num-brief-campo" value="' + esc(rotuloBrief(BRIEF)) + '" disabled></div>' +
+    '</div>' +
     '<p class="dica-campo">Se quem mediu for outra pessoa, informe na etapa 2.</p>' +
     '</div></section>'
   );
@@ -689,11 +713,7 @@ function htmlEtapa2(cfg) {
     '<div class="campo"><label>Responsável (contato)</label><input id="c-responsavel" type="text" value="' + esc(BRIEF.responsavel) + '"></div>' +
     '<div class="campo"><label>Telefone <span class="obrig">*</span></label><input id="c-telefone" type="tel" inputmode="tel" placeholder="(38) 99999-9999" value="' + esc(BRIEF.telefone) + '"></div>' +
     '</div>' +
-    '<div class="linha-2">' +
     '<div class="campo"><label>Data e hora da visita</label><input id="c-datahora" type="datetime-local" value="' + isoParaInputLocal(BRIEF.dataHora) + '"></div>' +
-    '<div class="campo"><label>Como nos conheceu</label><select id="c-conheceu"><option value="">Escolher…</option>' +
-    COMO_CONHECEU.map(o => '<option ' + (BRIEF.comoConheceu === o ? 'selected' : '') + '>' + o + '</option>').join('') + '</select></div>' +
-    '</div>' +
 
     '<div class="campo"><label>Tipo de medição <span class="obrig">*</span></label>' +
     '<div class="opcoes duas">' +
@@ -907,6 +927,7 @@ function htmlEtapa6() {
     '<section class="etapa" data-etapa="6"><div class="card">' +
     '<div class="sub-secao">Etapa 6 · Revisão e envio</div>' +
     '<dl>' +
+    '<div class="dupla-dado"><dt>Número do brief</dt><dd>' + esc(rotuloBrief(BRIEF)) + '</dd></div>' +
     '<div class="dupla-dado"><dt>Cliente</dt><dd>' + esc(BRIEF.cliente || '') + '</dd></div>' +
     '<div class="dupla-dado"><dt>Telefone</dt><dd>' + esc(BRIEF.telefone || '') + '</dd></div>' +
     '<div class="dupla-dado"><dt>Tipo de medição</dt><dd>' + esc(BRIEF.tipoMedicao || '') + '</dd></div>' +
@@ -961,7 +982,6 @@ function ligarEditor(cfg) {
   if (tel) tel.oninput = () => { tel.value = mascaraTel(tel.value); BRIEF.telefone = tel.value; salvarRascunho(); };
   const dh = $('#c-datahora');
   if (dh) dh.onchange = () => { BRIEF.dataHora = inputLocalParaISO(dh.value); salvarRascunho(); };
-  const ck = $('#c-conheceu'); if (ck) ck.onchange = () => { BRIEF.comoConheceu = ck.value; salvarRascunho(); };
   const nat = $('#c-natureza'); if (nat) nat.onchange = () => { BRIEF.naturezaServico = nat.value; salvarRascunho(); };
   const amb = $('#c-ambiente'); if (amb) amb.onchange = () => { BRIEF.ambiente = amb.value; salvarRascunho(); };
   bind('#c-quemmediu', 'quemMediu');
@@ -1277,10 +1297,11 @@ function renderDetalhe(app) {
   const linha = (dt, dd) => dd ? '<div class="dupla-dado"><dt>' + dt + '</dt><dd>' + dd + '</dd></div>' : '';
 
   app.innerHTML =
-    htmlTopo(b.cliente || 'Briefing') +
+    htmlTopo((b.numeroBrief ? 'Nº ' + padBrief(b.numeroBrief) + ' · ' : '') + (b.cliente || 'Briefing')) +
     '<main class="miolo">' +
     '<div class="titulo-pagina"><a href="#/" style="text-decoration:none">←</a> ' + esc(b.cliente || 'Briefing') +
     '<span class="badges">' +
+    (b.numeroBrief ? '<span class="badge neutro">Nº ' + padBrief(b.numeroBrief) + '</span>' : '') +
     (b.situacao !== 'enviado' ? '<span class="badge rascunho">RASCUNHO</span>' : badgeStatus(b.status)) +
     (b.tipoMedicao ? '<span class="badge ' + (b.tipoMedicao === 'Execução' ? 'tipo-execucao' : 'tipo-orcamento') + '">' + esc(b.tipoMedicao) + '</span>' : '') +
     (semOS ? '<span class="badge sem-os">SEM O.S.</span>' : '<span class="badge neutro">O.S. ' + esc(b.osNumero) + '</span>') +
@@ -1304,10 +1325,10 @@ function renderDetalhe(app) {
 
     // Dados
     '<div class="card"><div class="sub-secao">Cliente e visita</div><dl>' +
+    linha('Número do brief', b.numeroBrief ? 'Nº ' + padBrief(b.numeroBrief) : '') +
     linha('Cliente', esc(b.cliente)) +
     linha('Responsável', esc(b.responsavel)) +
     linha('Telefone', b.telefone ? '<a href="tel:' + esc(b.telefone.replace(/\D/g, '')) + '">' + esc(b.telefone) + '</a>' : '') +
-    linha('Como conheceu', esc(b.comoConheceu)) +
     linha('Data da visita', fmtDataHora(b.dataHora)) +
     linha('Vendedor', esc(b.vendedor)) +
     linha('Quem mediu', esc(b.quemMediu)) +

@@ -172,26 +172,39 @@ exports.handler = async (event, context) => {
         // aparelho atrasar para o próprio autor receber "conflito" na
         // edição seguinte.
         const toSave = { ...os };
+
+        // Numeração do brief: o servidor atribui o número sequencial na
+        // primeira sincronização (aparelhos offline não têm como combinar
+        // números entre si sem conflito) e preserva o número já atribuído
+        // mesmo se algum aparelho mandar uma versão sem ele.
+        if (existing && existing.numeroBrief && !toSave.numeroBrief) {
+          toSave.numeroBrief = existing.numeroBrief;
+        }
+        if (!toSave.numeroBrief) {
+          toSave.numeroBrief = await proximoNumeroBrief(store);
+        }
+
         await store.setJSON(os.id, toSave);
 
         // Eventos derivados da transição (log + webhook), sem travar a resposta
         // em caso de falha de log/webhook.
         const quem = toSave.atualizadoPor || 'app';
+        const base = { briefingId: toSave.id, numero: toSave.numeroBrief || null, cliente: toSave.cliente || '' };
         const foiEnviado = toSave.situacao === 'enviado' && (!existing || existing.situacao !== 'enviado');
         if (!existing) {
-          await registrarLog({ quem, acao: 'criou o briefing', briefingId: toSave.id, cliente: toSave.cliente || '' });
+          await registrarLog({ quem, acao: 'criou o briefing', ...base });
         } else if (toSave.apagadoEm && !existing.apagadoEm) {
-          await registrarLog({ quem, acao: 'moveu pra lixeira', briefingId: toSave.id, cliente: toSave.cliente || '' });
+          await registrarLog({ quem, acao: 'moveu pra lixeira', ...base });
         } else if (!toSave.apagadoEm && existing.apagadoEm) {
-          await registrarLog({ quem, acao: 'restaurou da lixeira', briefingId: toSave.id, cliente: toSave.cliente || '' });
+          await registrarLog({ quem, acao: 'restaurou da lixeira', ...base });
         } else if (foiEnviado) {
-          await registrarLog({ quem, acao: 'enviou pro design', briefingId: toSave.id, cliente: toSave.cliente || '' });
+          await registrarLog({ quem, acao: 'enviou pro design', ...base });
         } else if (existing.status !== toSave.status && toSave.status) {
-          await registrarLog({ quem, acao: 'mudou status: ' + (existing.status || 'sem status') + ' para ' + toSave.status, briefingId: toSave.id, cliente: toSave.cliente || '' });
+          await registrarLog({ quem, acao: 'mudou status: ' + (existing.status || 'sem status') + ' para ' + toSave.status, ...base });
         } else if (existing.situacao === 'enviado') {
           // Rascunho salva sozinho a cada campo; logar cada autosave viraria ruído.
           // Só edição de briefing JÁ ENVIADO entra no log.
-          await registrarLog({ quem, acao: 'editou o briefing', briefingId: toSave.id, cliente: toSave.cliente || '' });
+          await registrarLog({ quem, acao: 'editou o briefing', ...base });
         }
 
         if (foiEnviado) {
@@ -199,6 +212,7 @@ exports.handler = async (event, context) => {
           await dispararWebhook({
             evento: 'briefing_enviado',
             briefingId: toSave.id,
+            numeroBrief: toSave.numeroBrief || null,
             cliente: toSave.cliente || '',
             telefone: toSave.telefone || '',
             vendedor: toSave.vendedor || '',
@@ -234,9 +248,19 @@ exports.handler = async (event, context) => {
         await store.delete(id);
         await registrarLog({
           quem: body._quem || 'app', acao: 'apagou definitivamente',
-          briefingId: id, cliente: (existing && existing.cliente) || ''
+          briefingId: id, numero: (existing && existing.numeroBrief) || null,
+          cliente: (existing && existing.cliente) || ''
         });
         return resp({ ok: true });
+      }
+
+      // ── ajustarSeq: acerta o contador da numeração do brief (manutenção) ───
+      case 'ajustarSeq': {
+        const ultimo = Math.max(0, Number(body.ultimo) || 0);
+        await blobStore('cfg').setJSON('seq_brief', {
+          ultimo, em: new Date().toISOString(), ajustadoPor: body._quem || 'admin'
+        });
+        return resp({ ok: true, ultimo });
       }
 
       // ── getCfg / setCfg ─────────────────────────────────────────────────────
@@ -472,6 +496,29 @@ exports.handler = async (event, context) => {
     return resp({ error: msg, tipo: e && e.name }, 500);
   }
 };
+
+// Próximo número sequencial do brief. Contador em cfg/seq_brief com piso no
+// maior número já usado nos registros: se o contador se perder ou atrasar,
+// nunca nasce número duplicado (só pode pular). Volume da Impresilk é baixo,
+// então varrer os registros a cada atribuição custa pouco.
+async function proximoNumeroBrief(osStore) {
+  let ultimo = 0;
+  const cfgStore = blobStore('cfg');
+  try {
+    const s = await cfgStore.get('seq_brief', { type: 'json' });
+    if (s && Number(s.ultimo)) ultimo = Number(s.ultimo);
+  } catch {}
+  try {
+    const keys = await allKeys(osStore);
+    const todos = await Promise.all(keys.map(k => osStore.get(k, { type: 'json' }).catch(() => null)));
+    for (const b of todos) {
+      if (b && Number(b.numeroBrief) > ultimo) ultimo = Number(b.numeroBrief);
+    }
+  } catch {}
+  const proximo = ultimo + 1;
+  await cfgStore.setJSON('seq_brief', { ultimo: proximo, em: new Date().toISOString() });
+  return proximo;
+}
 
 // Coleta TODAS as chaves do store percorrendo o cursor de paginação do Netlify
 // Blobs. Retorna só os ids (leve), sem baixar o conteúdo de cada registro.

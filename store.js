@@ -301,11 +301,18 @@ const STORE = (() => {
           if (item.action === 'upsert' && res && res.os) {
             const all = getAllOS();
             const idx = all.findIndex(o => o.id === res.os.id);
-            // Só sincroniza o timestamp se NÃO houve edição local durante o
-            // envio — senão o pull deixaria de enxergar a divergência e a
-            // edição nova ficaria só neste aparelho.
-            if (idx >= 0 && all[idx].atualizadoEm === item.os.atualizadoEm) {
-              all[idx].atualizadoEm = res.os.atualizadoEm;
+            if (idx >= 0) {
+              // numeroBrief é campo do SERVIDOR (atribuído na 1ª sincronização):
+              // copia sempre que chegar, mesmo se houve edição local nova.
+              if (res.os.numeroBrief && !all[idx].numeroBrief) {
+                all[idx].numeroBrief = res.os.numeroBrief;
+              }
+              // Só sincroniza o timestamp se NÃO houve edição local durante o
+              // envio — senão o pull deixaria de enxergar a divergência e a
+              // edição nova ficaria só neste aparelho.
+              if (all[idx].atualizadoEm === item.os.atualizadoEm) {
+                all[idx].atualizadoEm = res.os.atualizadoEm;
+              }
               _setAllOS(all);
             }
           }

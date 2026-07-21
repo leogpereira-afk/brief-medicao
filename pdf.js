@@ -59,6 +59,9 @@ const PDF = (() => {
     if (!item) return '';
     return item.tipo === 'Outro' ? (item.tipoOutro || 'Outro') : (item.tipo || 'Item');
   }
+  function numBrief(b) {
+    return b && b.numeroBrief ? 'Nº ' + String(b.numeroBrief).padStart(4, '0') : '';
+  }
 
   // ── Cursor de página com quebra automática ────────────────────────────────
   function criarCursor(doc) {
@@ -180,8 +183,8 @@ const PDF = (() => {
 
   function metaVisita(b) {
     return [
-      ['Cliente', b.cliente], ['Telefone', b.telefone],
-      ['Responsável', b.responsavel], ['Como conheceu', b.comoConheceu],
+      ['Número do brief', numBrief(b)], ['Cliente', b.cliente],
+      ['Telefone', b.telefone], ['Responsável', b.responsavel],
       ['O.S.', String(b.osNumero || '').trim() || 'SEM O.S. por enquanto'], ['Serviço da O.S.', b.osServico],
       ['Tipo de medição', b.tipoMedicao], ['Natureza', b.naturezaServico],
       ['Ambiente', b.ambiente], ['Status', b.situacao === 'enviado' ? b.status : 'Rascunho'],
@@ -256,7 +259,7 @@ const PDF = (() => {
   async function briefingCompleto(b) {
     const doc = novoDoc();
     const c = criarCursor(doc);
-    cabecalho(doc, c, 'BRIEF DE MEDIÇÃO', fmtDataLocal(b.dataHora));
+    cabecalho(doc, c, 'BRIEF DE MEDIÇÃO', (numBrief(b) ? numBrief(b) + ' · ' : '') + fmtDataLocal(b.dataHora));
 
     tituloSecao(doc, c, 'Cliente e visita');
     gradeDados(doc, c, metaVisita(b));
@@ -285,8 +288,8 @@ const PDF = (() => {
     doc.setFont('Spectral'); doc.setFontSize(8.5); doc.setTextColor(...CINZA);
     doc.text('Gerado em ' + fmtDataHoraLocal(new Date().toISOString()) + ' por ' + ((STORE.getUser() || {}).nome || ''), M, c.y + 8);
 
-    fecharDocumento(doc, 'Brief de Medição · ' + (b.cliente || '') + (String(b.osNumero || '').trim() ? ' · O.S. ' + b.osNumero : ''));
-    doc.save('briefing-' + nomeArquivo(b.cliente) + (String(b.osNumero || '').trim() ? '-os' + b.osNumero : '') + '.pdf');
+    fecharDocumento(doc, 'Brief de Medição ' + (numBrief(b) || '') + ' · ' + (b.cliente || '') + (String(b.osNumero || '').trim() ? ' · O.S. ' + b.osNumero : ''));
+    doc.save('brief-' + (b.numeroBrief ? String(b.numeroBrief).padStart(4, '0') + '-' : '') + nomeArquivo(b.cliente) + '.pdf');
   }
 
   // ── PDF de um item específico (pra produção ou cliente) ───────────────────
@@ -294,11 +297,12 @@ const PDF = (() => {
     const doc = novoDoc();
     const c = criarCursor(doc);
     const idx = Math.max(0, (b.itens || []).findIndex(i => i.id === item.id));
-    cabecalho(doc, c, 'MEDIDA · ' + nomeDoItem(item).toUpperCase(), fmtDataLocal(b.dataHora));
+    cabecalho(doc, c, 'MEDIDA · ' + nomeDoItem(item).toUpperCase(), (numBrief(b) ? numBrief(b) + ' · ' : '') + fmtDataLocal(b.dataHora));
 
     tituloSecao(doc, c, 'Referência');
     gradeDados(doc, c, [
-      ['Cliente', b.cliente], ['Telefone', b.telefone],
+      ['Número do brief', numBrief(b)], ['Cliente', b.cliente],
+      ['Telefone', b.telefone],
       ['O.S.', String(b.osNumero || '').trim() || 'SEM O.S. por enquanto'], ['Tipo de medição', b.tipoMedicao],
       ['Endereço', b.endereco], ['Quem mediu', b.quemMediu]
     ]);
@@ -313,8 +317,8 @@ const PDF = (() => {
 
     await blocoItem(doc, c, item, idx, true);
 
-    fecharDocumento(doc, 'Item ' + (idx + 1) + ' · ' + (b.cliente || ''));
-    doc.save('item-' + nomeArquivo(nomeDoItem(item)) + '-' + nomeArquivo(b.cliente) + '.pdf');
+    fecharDocumento(doc, 'Brief ' + (numBrief(b) || '') + ' · Item ' + (idx + 1) + ' · ' + (b.cliente || ''));
+    doc.save('item-' + (b.numeroBrief ? String(b.numeroBrief).padStart(4, '0') + '-' : '') + nomeArquivo(nomeDoItem(item)) + '-' + nomeArquivo(b.cliente) + '.pdf');
   }
 
   // ── Ficha de visita pra imprimir (desenho a mão continua no papel) ───────
@@ -357,10 +361,11 @@ const PDF = (() => {
       return x + 10.5 + doc.getTextWidth(rotulo) + 12;
     };
 
-    // Linha 1: data, vendedor, O.S.
-    linhaCampo('DATA:', b ? fmtDataLocal(b.dataHora) : '', M, 118, 34);
-    linhaCampo('VENDEDOR:', b ? b.vendedor : '', M + 128, 205, 58);
-    linhaCampo('Nº O.S.:', b && String(b.osNumero || '').trim() ? b.osNumero : '', M + 343, 168, 44);
+    // Linha 1: data, vendedor, O.S., número do brief
+    linhaCampo('DATA:', b ? fmtDataLocal(b.dataHora) : '', M, 100, 34);
+    linhaCampo('VENDEDOR:', b ? b.vendedor : '', M + 110, 175, 58);
+    linhaCampo('Nº O.S.:', b && String(b.osNumero || '').trim() ? b.osNumero : '', M + 295, 100, 44);
+    linhaCampo('Nº BRIEF:', b && b.numeroBrief ? String(b.numeroBrief).padStart(4, '0') : '', M + 405, LARG - 405, 50);
     y += 17;
     linhaCampo('EMPRESA:', b ? b.cliente : '', M, 300, 52);
     linhaCampo('RESPONSÁVEL:', b ? b.responsavel : '', M + 310, 201, 74);
@@ -370,18 +375,11 @@ const PDF = (() => {
     y += 17;
     linhaCampo('ENDEREÇO:', b ? b.endereco : '', M, LARG, 58);
     y += 17;
-    linhaCampo('REFERÊNCIA:', b ? b.pontoReferencia : '', M, 300, 64);
-    // Como conheceu
-    let xc = M + 312;
-    doc.setFont('Poppins'); doc.setFontSize(7.4); doc.setTextColor(...TINTA);
-    doc.text('CONHECEU:', xc, y); xc += 50;
-    ['Google', 'Instagram', 'Indicação'].forEach(op => { xc = caixinha(op, xc, b && b.comoConheceu === op); });
-    y += 15;
-    xc = M + 362;
-    ['Facebook', 'Em instalação', 'Carro'].forEach(op => { xc = caixinha(op, xc, b && b.comoConheceu === op); });
+    linhaCampo('REFERÊNCIA:', b ? b.pontoReferencia : '', M, LARG, 64);
+    let xc;
 
     // Tipo de serviço
-    y += 12;
+    y += 18;
     doc.setFillColor(...INDIGO_CLARO);
     doc.rect(M, y - 9, LARG, 15, 'F');
     doc.setFont('Poppins'); doc.setFontSize(8.5); doc.setTextColor(...INDIGO_ESCURO);
@@ -475,7 +473,7 @@ const PDF = (() => {
     doc.setFont('Poppins'); doc.setFontSize(6.8); doc.setTextColor(...CINZA);
     doc.text('Fotografe o desenho pronto e anexe no Brief de Medição (Desenhos da visita).', M, H - 26);
 
-    doc.save(b ? 'ficha-visita-' + nomeArquivo(b.cliente || 'cliente') + '.pdf' : 'ficha-visita-em-branco.pdf');
+    doc.save(b ? 'ficha-visita-' + (b.numeroBrief ? String(b.numeroBrief).padStart(4, '0') + '-' : '') + nomeArquivo(b.cliente || 'cliente') + '.pdf' : 'ficha-visita-em-branco.pdf');
   }
 
   return { briefingCompleto, itemUnico, fichaVisita };

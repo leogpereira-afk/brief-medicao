@@ -3,7 +3,7 @@
 //
 // DISCIPLINA: bump no CACHE (v1 → v2 → …) A CADA deploy, senão os aparelhos
 // ficam presos na versão antiga.
-const CACHE = 'brief-shell-v4';
+const CACHE = 'brief-shell-v5';
 const SHELL = [
   './', 'index.html', 'config.js', 'store.js', 'app.js', 'pdf.js', 'styles.css', 'sw.js',
   'manifest.webmanifest', 'logo-impresilk.png', 'logo-impresilk-branco.png',
