@@ -298,10 +298,22 @@ exports.handler = async (event, context) => {
         return resp({ ok: true });
       }
 
-      // ── ajustarSeq: acerta o contador da numeração do brief (manutenção) ───
+      // ── ajustarSeq: acerta o hint da numeração do brief (manutenção) ───────
+      // Ajusta só o hint (piso de partida). Não recicla números já reivindicados
+      // — as chaves num_N ficam. `limparClaims:true` (uso administrativo/teste)
+      // apaga as reivindicações num_N acima do novo valor, liberando-os de novo.
       case 'ajustarSeq': {
+        const cfgStore = blobStore('cfg');
         const ultimo = Math.max(0, Number(body.ultimo) || 0);
-        await blobStore('cfg').setJSON('seq_brief', {
+        if (body.limparClaims) {
+          const keys = await allKeys(cfgStore);
+          await Promise.all(keys.filter(k => {
+            if (!k.startsWith('num_')) return false;
+            const n = Number(k.slice(4));
+            return Number.isFinite(n) && n > ultimo;
+          }).map(k => cfgStore.delete(k).catch(() => {})));
+        }
+        await cfgStore.setJSON('seq_brief', {
           ultimo, em: new Date().toISOString(), ajustadoPor: body._quem || 'admin'
         });
         return resp({ ok: true, ultimo });
@@ -543,18 +555,28 @@ exports.handler = async (event, context) => {
 
 // Próximo número sequencial do brief, à prova de corrida.
 //
-// O contador vive em cfg/seq_brief. Duas Netlify Functions podem rodar ao mesmo
-// tempo (dois vendedores criando brief no mesmo instante): um "lê 1, grava 2" de
-// cada lado geraria número DUPLICADO. Por isso o incremento usa escrita
-// condicional do Netlify Blobs (compare-and-swap por etag): só grava se o etag
-// não mudou desde a leitura; se outro incrementou no meio, relê e tenta de novo.
-// O piso no maior número já existente é rede de segurança caso o contador se perca.
+// Duas Netlify Functions podem rodar ao mesmo tempo (dois vendedores criando
+// brief no mesmo instante). O truque é reivindicar cada número numa CHAVE PRÓPRIA
+// (num_1, num_2, …) com a escrita condicional onlyIfNew do Netlify Blobs, que é
+// atômica de verdade: entre N chamadas simultâneas gravando a mesma chave nova,
+// exatamente UMA vence (modified:true) e as outras recebem modified:false. Quem
+// perde num_K tenta num_(K+1). Assim nunca há número duplicado.
+//
+// (Evitamos deliberadamente um contador único com onlyIfMatch/etag: o etag lido
+// pode vir defasado entre réplicas do store, e aí dois "incrementos" gravam o
+// mesmo valor. onlyIfNew não depende de leitura prévia, então não sofre disso.)
+//
+// O "piso" (hint do último número + maior número nos registros) só serve para o
+// loop começar perto do próximo livre; se estiver defasado, as primeiras chaves
+// num_K já existem, retornam modified:false e o loop avança até achar a livre.
 async function proximoNumeroBrief(osStore) {
   const cfgStore = blobStore('cfg');
 
-  // Piso: maior número já atribuído nos registros (defasado pela consistência
-  // eventual da listagem, mas o contador com etag é a fonte primária).
   let piso = 0;
+  try {
+    const hint = await cfgStore.get('seq_brief', { type: 'json' });
+    if (hint && Number(hint.ultimo)) piso = Number(hint.ultimo);
+  } catch {}
   try {
     const keys = await allKeys(osStore);
     const todos = await Promise.all(keys.map(k => osStore.get(k, { type: 'json' }).catch(() => null)));
@@ -563,29 +585,23 @@ async function proximoNumeroBrief(osStore) {
     }
   } catch {}
 
-  for (let tentativa = 0; tentativa < 30; tentativa++) {
-    let atual = 0;
-    let etag = null;
-    try {
-      const meta = await cfgStore.getWithMetadata('seq_brief', { type: 'json' });
-      if (meta) { atual = Number(meta.data && meta.data.ultimo) || 0; etag = meta.etag; }
-    } catch {}
-    const proximo = Math.max(atual, piso) + 1;
-    const opts = etag ? { onlyIfMatch: etag } : { onlyIfNew: true };
+  let n = piso + 1;
+  for (let i = 0; i < 1000; i++, n++) {
     let res;
     try {
-      res = await cfgStore.set('seq_brief', JSON.stringify({ ultimo: proximo, em: new Date().toISOString() }), opts);
+      res = await cfgStore.set('num_' + n, '1', { onlyIfNew: true });
     } catch {
-      continue; // conflito de escrita condicional → outra função ganhou; tenta de novo
+      continue; // erro transitório nessa chave → tenta a próxima
     }
-    if (res && res.modified) return proximo; // ganhamos a corrida deste incremento
-    // res.modified === false: etag mudou (ou a chave já existia) → relê e repete
+    if (res && res.modified) {
+      // Reivindicamos o número n com exclusividade. Atualiza o hint pra acelerar
+      // as próximas atribuições (best-effort; a correção não depende dele).
+      cfgStore.setJSON('seq_brief', { ultimo: n, em: new Date().toISOString() }).catch(() => {});
+      return n;
+    }
+    // modified:false → num_n já foi reivindicado por outro; tenta n+1
   }
-
-  // Salvaguarda extrema (não deve acontecer): grava sem condição a partir do piso.
-  const fallback = piso + 1;
-  try { await cfgStore.setJSON('seq_brief', { ultimo: fallback, em: new Date().toISOString() }); } catch {}
-  return fallback;
+  return n; // salvaguarda extrema (não deve acontecer)
 }
 
 // Coleta TODAS as chaves do store percorrendo o cursor de paginação do Netlify
