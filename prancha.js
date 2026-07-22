@@ -1,37 +1,170 @@
-// prancha.js — Gerador da prancha de layout da Impresilk (A4 paisagem).
+// prancha.js — Prancha técnica da Impresilk (A4 paisagem), fiel ao modelo em uso.
 //
-// Mesmo modelo para os dois modos:
-//   PRODUÇÃO — uma prancha por setor (Impressão, Recorte, Acabamento…)
-//   PROJETO  — uma prancha por arte final aprovada (JPG)
+// Estrutura do modelo original:
+//   cabeçalho em caixas (logo + contatos | cliente/contato/vend/designer/entrega |
+//   selo colorido do setor + texto de direitos | data, prancha 01/01, Nº da O.S.),
+//   barra vermelha de ATENÇÃO nos setores de produção,
+//   corpo branco pro desenho, checklists do setor na lateral esquerda,
+//   carimbo URGENTE e linhas de liberação no rodapé.
 //
-// Desenhado direto em vetor com jsPDF (mesma base do resto do app): o texto sai
-// nítido em qualquer ampliação da gráfica, coisa que uma captura de HTML não dá.
-// Depende de libs/jspdf.umd.min.js e libs/pdf-assets.js (fontes + logo).
+// Cada setor tem o SEU modelo (cor do selo e checklists), copiado das ordens que
+// a empresa já usa. Desenhado em vetor com jsPDF: texto nítido na gráfica.
 
 const PRANCHA = (() => {
-  const INDIGO = [56, 64, 232];
-  const INDIGO_ESCURO = [42, 48, 184];
-  const LARANJA = [234, 88, 12];        // selo do serviço
-  const TINTA = [23, 26, 51];
-  const CINZA = [90, 94, 122];
-  const CINZA_CLARO = [150, 154, 175];
-  const BORDA = [200, 204, 226];
-  const FUNDO_SUAVE = [244, 245, 251];
+  const PRETO = [0, 0, 0];
+  const CINZA_TXT = [90, 90, 90];
+  const BORDA = [0, 0, 0];
+  const VERMELHO = [227, 6, 19];
+  const AZUL_BARRA = [40, 48, 140];
 
-  // A4 paisagem
-  const W = 841.89, H = 595.28, M = 22;
-  const LARG = W - M * 2;
+  const W = 841.89, H = 595.28;
+  const M = 8;                       // margem da folha
   const LOGO_PROP = 381 / 760;
 
+  // ── Modelos por setor (cor do selo + checklists da ordem em uso) ──────────
+  const T = (titulo, itens, colunas, opcoes) =>
+    Object.assign({ titulo, itens, colunas: colunas || [] }, opcoes || {});
+
+  const MODELOS = {
+    'Instalação': {
+      cor: [245, 130, 31], corTexto: [255, 255, 255],
+      atencao: false, enderecoObs: true, rotuloData: 'Data:',
+      tabelas: [
+        T('SUPERFÍCIES', ['Alvenaria lisa', 'Alvenaria texturizada', 'Bloco de concreto', 'Tijolo furado',
+          'Aço', 'ACM', 'Acrílico', 'PVC', 'Vidro', 'Drywall / Gesso', 'Telha', 'Pedra Natural',
+          'Porcelanato', 'Outros:', 'Não se aplica']),
+        T('ELÉTRICA / HIDRÁULICA', ['Fiação aparente', 'Fiação embutida', 'Energia 110V', 'Energia 220V',
+          'Não há energia', 'Parede c/ tubulação']),
+        T('EQUIPAMENTOS', ['Escada extensiva', 'Escada tesoura', 'Andaime', 'Munck', 'Plataforma', 'Guindaste'])
+      ],
+      rodape: null
+    },
+    'Router': {
+      cor: [255, 194, 14], corTexto: [40, 40, 40],
+      atencao: true, enderecoObs: false, rotuloData: 'Data:', dataInicioEntrega: true,
+      tabelas: [
+        T('MATERIAL', ['ACM', 'PVC EXP.', 'POLICARBONATO', 'MDF', 'ACRÍLICO', 'PS'], ['ESPESSURA']),
+        T('ACABAMENTO', ['CORTE', 'REBAIXO', 'FRISAGEM'])
+      ],
+      selos: ['espelhado'],
+      rodape: 'tecnica-producao'
+    },
+    'Fibra letra caixa': {
+      cor: [227, 6, 19], corTexto: [255, 255, 255],
+      atencao: true, enderecoObs: false, rotuloData: 'Data Export:',
+      tabelas: [
+        T('MATERIAL', ['Galvanizada', 'Inox', 'Chapa preta'], ['TIPO', 'ESPESSURA']),
+        T('MODELO', ['Cega', 'Retroiluminada', 'Iluminada']),
+        T('VARIAÇÃO', ['Película Acrílica', 'Face Acrílica', 'Pintura Automotiva']),
+        T('BORDA', ['3CM', '5CM', '7,5CM', '15CM']),
+        T('ILUMINAÇÃO', ['Quente', 'Fria', 'Neutra'], ['TIPO', 'POTÊNCIA'])
+      ],
+      rodape: 'producao'
+    },
+    'Laser C02': {
+      cor: [27, 59, 139], corTexto: [255, 255, 255],
+      atencao: true, enderecoObs: false, rotuloData: 'Data Export:',
+      tabelas: [
+        T('FITA DUPLA FACE', ['MASSA BRANCA', 'VHB TRNSPA.', '3M', 'MANTA DUPLA FACE'], ['ESPESSURA', 'DIMENSÃO']),
+        T('MATERIAL', ['Acrílico', 'MDF', 'Papel'], ['ESPESSURA', 'COR'])
+      ],
+      rodape: 'producao'
+    },
+    'Serralheria': {
+      cor: [166, 166, 166], corTexto: [40, 40, 40],
+      atencao: false, enderecoObs: false, rotuloData: 'Data:', endEntregaNoCabecalho: true,
+      tabelas: [
+        T('Plano de Corte', ['Metalom', 'Metalom', 'Metalom'], ['Chapa', 'DIM', 'Medida', 'QTD', 'Corte'], { semCheck: true }),
+        T('Aço', ['Metalom 20x20', 'Metalom 20x30', 'Metalom 50x30', 'Alumínio 50x25', 'Perfil 50x25'], ['n°/ Barras', ''], {
+          cores: [[64, 64, 64], [232, 62, 100], [46, 204, 154], [86, 74, 168], [237, 139, 47]], semCheck: true
+        }),
+        T('Suportes', ['Mão francesa', 'Suporte'], ['Medida', 'QTD'], { cores: [[41, 171, 226], [41, 171, 226]], semCheck: true })
+      ],
+      rodape: 'tecnica-producao'
+    },
+    'Impressão lona': {
+      cor: [35, 31, 32], corTexto: [255, 255, 255],
+      atencao: true, enderecoObs: false, rotuloData: 'Data Export:',
+      tabelas: [
+        T('LONA', ['Front', 'Back', 'Mesh', 'Titanium', 'Texturizada', '']),
+        T('Variação', ['Brilho', 'Fosco']),
+        T('ACABAMENTO', ['Sem Acabamento', 'Ilhós Total', 'Ilhós Localizado', 'Com Verniz', 'Bastão', 'Corda', 'Fita de Reforço']),
+        T('ORIGEM MEDIDAS', ['CLIENTE', 'CONSULTOR', 'TÉCNICO']),
+        T('Exportado Com:', ['MEDIDAS EXATAS', 'MEDIDAS C/ SOBRAS'])
+      ],
+      rodape: 'producao'
+    },
+    'Laser brindes': {
+      cor: [160, 36, 143], corTexto: [255, 255, 255],
+      atencao: true, enderecoObs: false, rotuloData: 'Data Export:',
+      caixasSoltas: ['GRAVAÇÃO', 'DTF'],
+      tabelas: [
+        T('MATERIAL', ['KIT', 'COPO', 'CANECA', 'CANETA', 'MOLESQUINE', 'PLACA INOX', 'GARRAFA', ''], ['COR', 'MODELO'])
+      ],
+      rodape: 'producao'
+    },
+    'Impressão vinil': {
+      cor: [35, 31, 32], corTexto: [255, 255, 255],
+      atencao: true, enderecoObs: false, rotuloData: 'Data Export:',
+      tabelas: [
+        T('VINIL', ['Leitoso', 'Blockout', 'Transparente', 'Automotivo', 'Jateado', 'Perfurado', 'Refletivo', 'Parede']),
+        T('COLORIDO', ['', '', ''], ['COR', 'MARCA'], { semCheck: true }),
+        T('Variação', ['Brilho', 'Fosco']),
+        T('ACABAMENTO', ['Sem Acabamento', 'Recorte e Máscara', 'Recorte e Cartela', 'Recorte', 'Refile', 'Com Verniz', 'Laminado', 'Espelhado']),
+        T('ORIGEM MEDIDAS', ['CLIENTE', 'CONSULTOR', 'TÉCNICO']),
+        T('Exportado com:', ['MEDIDAS EXATAS', 'MEDIDAS C/ SOBRAS'])
+      ],
+      rodape: 'producao'
+    },
+    'Impressão UV': {
+      cor: [0, 166, 81], corTexto: [255, 255, 255],
+      atencao: true, enderecoObs: false, rotuloData: 'Data Export:',
+      tabelas: [
+        T('PS', ['2MM', '3MM']),
+        T('MDF', ['3MM', '6MM', '10MM', '15MM']),
+        T('ACRÍLICO', ['', '', ''], ['COR', 'ESPESSURA'], { semCheck: true }),
+        T('MATERIAL DIVERSOS', ['', '', ''], ['MATERIAL', 'ESPESSURA'], { semCheck: true }),
+        T('MODELO DE IMPRESSÃO', ['COLORIDO', 'COLORIDO INVERTIDO', 'COLORIDO INVERTIDO + BRANCO',
+          'COLORIDO DUPLA FACE', 'COLORIDO DUPLA FACE + BRANCO', 'BRANCO + IMPRESSÃO COLORIDA',
+          'BRANCO', 'COLORIDO INVERTIDO + ADESIVO BRANCO'])
+      ],
+      rodape: 'producao'
+    },
+    'Ploter papel outdoor': {
+      cor: [245, 130, 31], corTexto: [255, 255, 255],
+      atencao: true, enderecoObs: false, rotuloData: 'Data:',
+      tabelas: [],
+      rodape: 'comercial-producao'
+    }
+  };
+
+  // Setor sem modelo próprio cai neste (só o cabeçalho e o corpo limpo)
+  const MODELO_PADRAO = {
+    cor: [56, 64, 232], corTexto: [255, 255, 255],
+    atencao: false, enderecoObs: true, rotuloData: 'Data:', tabelas: [], rodape: 'producao'
+  };
+
+  function modeloDe(nome) {
+    if (!nome) return MODELO_PADRAO;
+    const chave = Object.keys(MODELOS).find(k => norm(k) === norm(nome));
+    return chave ? MODELOS[chave] : MODELO_PADRAO;
+  }
+  function norm(s) {
+    return String(s || '').toLowerCase().normalize('NFD').replace(/[̀-ͯ]/g, '').trim();
+  }
+
+  // ── Base do documento ─────────────────────────────────────────────────────
   function novoDoc() {
     const { jsPDF } = window.jspdf;
     const doc = new jsPDF({ unit: 'pt', format: 'a4', orientation: 'landscape', compress: true });
     doc.addFileToVFS('Poppins-SemiBold.ttf', PDF_FONTES['Poppins-SemiBold']);
-    doc.addFont('Poppins-SemiBold.ttf', 'Poppins', 'normal');
-    doc.addFileToVFS('Spectral-Regular.ttf', PDF_FONTES['Spectral-Regular']);
-    doc.addFont('Spectral-Regular.ttf', 'Spectral', 'normal');
-    doc.addFileToVFS('Spectral-SemiBold.ttf', PDF_FONTES['Spectral-SemiBold']);
-    doc.addFont('Spectral-SemiBold.ttf', 'Spectral', 'bold');
+    doc.addFont('Poppins-SemiBold.ttf', 'Poppins', 'bold');
+    if (PDF_FONTES['Poppins-Regular']) {
+      doc.addFileToVFS('Poppins-Regular.ttf', PDF_FONTES['Poppins-Regular']);
+      doc.addFont('Poppins-Regular.ttf', 'Poppins', 'normal');
+    } else {
+      doc.addFont('Poppins-SemiBold.ttf', 'Poppins', 'normal');
+    }
     return doc;
   }
 
@@ -49,238 +182,305 @@ const PRANCHA = (() => {
       im.src = dataUrl;
     });
   }
-  // Corta o texto na largura disponível, sem estourar a caixa
   function cortar(doc, texto, largura) {
     const t = String(texto == null ? '' : texto);
-    if (!t) return '';
-    return doc.splitTextToSize(t, largura)[0] || '';
+    return t ? (doc.splitTextToSize(t, largura)[0] || '') : '';
   }
-
-  // ── Um campo rotulado da faixa de dados ───────────────────────────────────
-  function campo(doc, rotulo, valor, x, y, largura) {
-    doc.setFont('Poppins', 'normal'); doc.setFontSize(5.6); doc.setTextColor(...CINZA_CLARO);
-    doc.text(String(rotulo).toUpperCase(), x, y);
-    doc.setFont('Spectral', 'bold'); doc.setFontSize(8.4); doc.setTextColor(...TINTA);
-    doc.text(cortar(doc, valor || '', largura), x, y + 10);
+  function caixa(doc, x, y, w, h) {
+    doc.setDrawColor(...BORDA); doc.setLineWidth(0.8);
+    doc.rect(x, y, w, h);
+  }
+  // "Rótulo: valor" dentro de uma caixa
+  function rotuloValor(doc, rotulo, valor, x, y, larguraCaixa, tamRotulo, tamValor) {
+    doc.setFont('Poppins', 'normal'); doc.setFontSize(tamRotulo || 10); doc.setTextColor(...PRETO);
+    doc.text(rotulo, x, y);
+    const xv = x + doc.getTextWidth(rotulo) + 6;
+    doc.setFontSize(tamValor || tamRotulo || 10); doc.setTextColor(...CINZA_TXT);
+    doc.text(cortar(doc, valor, Math.max(10, larguraCaixa - (xv - x) - 6)), xv, y);
   }
 
   // ── Cabeçalho ─────────────────────────────────────────────────────────────
-  function cabecalho(doc, p, cfg) {
+  function cabecalho(doc, p, cfg, modelo) {
     const empresa = (cfg && cfg.empresa) || {};
-    const TOPO = 74;
+    const y0 = M, altura = 84, linha = altura / 3;
+    const xLogo = M, wLogo = 218;
+    const xMeio = xLogo + wLogo, wMeio = 328;
+    const xSelo = xMeio + wMeio, wSelo = 152;
+    const xDir = xSelo + wSelo, wDir = W - M - xDir;
 
-    // Faixa indigo com logo e contatos
-    doc.setFillColor(...INDIGO);
-    doc.rect(0, 0, W, TOPO, 'F');
-    doc.setFillColor(...INDIGO_ESCURO);
-    doc.rect(0, TOPO - 4, W, 4, 'F');
-
-    // Logo sobre chapa branca (o logo é colorido, não vive bem sobre indigo)
-    const lw = 116, lh = lw * LOGO_PROP;
-    doc.setFillColor(255, 255, 255);
-    doc.roundedRect(M, 12, lw + 14, lh + 12, 5, 5, 'F');
-    try { doc.addImage(PDF_LOGO, 'PNG', M + 7, 18, lw, lh); } catch {}
-
-    // Contatos da empresa, duas colunas enxutas
+    // Bloco do logo + contatos
+    caixa(doc, xLogo, y0, wLogo, altura);
+    const lw = 104, lh = lw * LOGO_PROP;
+    try { doc.addImage(PDF_LOGO, 'PNG', xLogo + 6, y0 + (altura - lh) / 2 - 4, lw, lh); } catch {}
+    const xc = xLogo + wLogo - 6;
+    doc.setTextColor(...PRETO);
+    let yc = y0 + 16;
     const contatos = [
-      ['Instagram', empresa.instagram], ['WhatsApp', empresa.whatsapp],
-      ['Telefone', empresa.telefone], ['E-mail', empresa.email]
-    ].filter(c => c[1]);
-    doc.setTextColor(255, 255, 255);
-    let cx = M + lw + 34;
-    contatos.forEach((c, i) => {
-      const col = i % 2, lin = Math.floor(i / 2);
-      doc.setFont('Poppins', 'normal'); doc.setFontSize(5.6);
-      doc.text(c[0].toUpperCase(), cx + col * 118, 24 + lin * 20);
-      doc.setFontSize(8);
-      doc.text(cortar(doc, c[1], 112), cx + col * 118, 34 + lin * 20);
+      empresa.instagram && ('@' + String(empresa.instagram).replace(/^@/, '')),
+      empresa.whatsapp, empresa.telefone
+    ].filter(Boolean);
+    contatos.forEach(c => {
+      doc.setFont('Poppins', 'normal'); doc.setFontSize(6.6);
+      doc.text(cortar(doc, c, 104), xc, yc, { align: 'right' });
+      yc += 9;
     });
-    if (empresa.endereco) {
-      doc.setFont('Poppins', 'normal'); doc.setFontSize(5.6);
-      doc.text('ENDEREÇO', cx, 64);
-      doc.setFontSize(7.6);
-      doc.text(cortar(doc, empresa.endereco, 236), cx, 71.5);
-    }
+    doc.setFontSize(5.2); doc.setTextColor(...CINZA_TXT);
+    (empresa.endereco ? doc.splitTextToSize(empresa.endereco, 106).slice(0, 2) : []).forEach(l => {
+      doc.text(l, xc, yc, { align: 'right' }); yc += 6.6;
+    });
+    if (empresa.email) { doc.text(cortar(doc, empresa.email, 106), xc, yc, { align: 'right' }); }
 
-    // Selo laranja do serviço, em destaque à direita
-    const selo = String(p.seloServico || p.setor || '').toUpperCase();
-    if (selo) {
-      doc.setFont('Poppins', 'normal'); doc.setFontSize(15);
-      const largSelo = Math.max(120, doc.getTextWidth(selo) + 34);
-      doc.setFillColor(...LARANJA);
-      doc.roundedRect(W - M - largSelo, 16, largSelo, 30, 6, 6, 'F');
-      doc.setTextColor(255, 255, 255);
-      doc.text(selo, W - M - largSelo / 2, 36, { align: 'center' });
-    }
+    // Bloco do meio: cliente/contato, vend/designer, entrega
+    caixa(doc, xMeio, y0, wMeio, linha);
+    rotuloValor(doc, 'Cliente:', p.cliente, xMeio + 8, y0 + linha / 2 + 4, wMeio / 2 - 10, 10.5);
+    rotuloValor(doc, 'Contato:', p.contato, xMeio + wMeio / 2 + 6, y0 + linha / 2 + 4, wMeio / 2 - 14, 10.5);
 
-    // Numeração da prancha e O.S., logo abaixo do selo
-    doc.setFont('Poppins', 'normal'); doc.setFontSize(9);
-    doc.setTextColor(255, 255, 255);
-    const numero = p2(p.numero || 1) + '/' + p2(p.total || 1);
-    const os = String(p.osNumero || '').trim() || 'S/N';
-    doc.text('PRANCHA ' + numero + '     O.S. ' + os, W - M, 60, { align: 'right' });
+    caixa(doc, xMeio, y0 + linha, wMeio, linha);
+    rotuloValor(doc, 'Vend:', p.vendedor, xMeio + 8, y0 + linha * 1.5 + 4, wMeio / 2 - 10, 10.5);
+    rotuloValor(doc, 'Designer:', p.designer, xMeio + wMeio / 2 + 6, y0 + linha * 1.5 + 4, wMeio / 2 - 14, 10.5);
 
-    return TOPO;
-  }
-
-  // ── Faixa de dados do serviço ─────────────────────────────────────────────
-  function faixaDados(doc, p, cfg, y) {
-    const ALT = 40;
-    doc.setFillColor(...FUNDO_SUAVE);
-    doc.rect(0, y, W, ALT, 'F');
-    doc.setDrawColor(...BORDA); doc.setLineWidth(0.6);
-    doc.line(0, y + ALT, W, y + ALT);
-
-    // 5 colunas: cliente, contato, vendedor, designer, entrega
-    const col = LARG / 5;
-    const base = y + 16;
-    campo(doc, 'Cliente', p.cliente, M, base, col - 12);
-    campo(doc, 'Contato', p.contato, M + col, base, col - 12);
-    campo(doc, 'Vend.', p.vendedor, M + col * 2, base, col - 12);
-    campo(doc, 'Designer', p.designer, M + col * 3, base, col - 12);
-    campo(doc, 'Data', fmtData(p.data), M + col * 4, base, (col - 12) / 2 - 4);
-    campo(doc, 'Entrega', p.dataEntrega ? fmtData(p.dataEntrega) : '—', M + col * 4 + (col - 12) / 2, base, (col - 12) / 2);
-    return y + ALT;
-  }
-
-  // ── Linha de endereço e observação ────────────────────────────────────────
-  function linhaEndereco(doc, p, y) {
-    const ALT = 26;
-    doc.setDrawColor(...BORDA); doc.setLineWidth(0.6);
-    doc.line(0, y + ALT, W, y + ALT);
-    doc.setFont('Poppins', 'normal'); doc.setFontSize(5.6); doc.setTextColor(...CINZA_CLARO);
-    doc.text('ENDEREÇO', M, y + 10);
-    doc.setFont('Spectral', 'normal'); doc.setFontSize(8); doc.setTextColor(...TINTA);
-    doc.text(cortar(doc, p.endereco || '', LARG * 0.52), M + 48, y + 10);
-
-    doc.setFont('Poppins', 'normal'); doc.setFontSize(5.6); doc.setTextColor(...CINZA_CLARO);
-    doc.text('OBS', M + LARG * 0.58, y + 10);
-    doc.setFont('Spectral', 'normal'); doc.setFontSize(8); doc.setTextColor(...TINTA);
-    doc.text(cortar(doc, p.obs || '', LARG * 0.36), M + LARG * 0.58 + 24, y + 10);
-
-    // Linha pontilhada pra escrever à mão quando a obs vem vazia
-    if (!p.obs) {
-      doc.setDrawColor(...BORDA);
-      doc.line(M + LARG * 0.58 + 24, y + 12, W - M, y + 12);
-    }
-    doc.setFont('Poppins', 'normal'); doc.setFontSize(5.2); doc.setTextColor(...CINZA_CLARO);
-    doc.text(cortar(doc, p.textoDireitos || '', LARG), M, y + 21);
-    return y + ALT;
-  }
-
-  // ── Rodapé: equipe, ferramentas e acessórios ──────────────────────────────
-  function tabelaRodape(doc, titulo, colunas, linhas, x, y, largura, altura) {
-    doc.setDrawColor(...BORDA); doc.setLineWidth(0.6);
-    doc.roundedRect(x, y, largura, altura, 4, 4, 'S');
-
-    // Cabeça
-    doc.setFillColor(...FUNDO_SUAVE);
-    doc.roundedRect(x, y, largura, 15, 4, 4, 'F');
-    doc.rect(x, y + 9, largura, 6, 'F');
-    doc.setFont('Poppins', 'normal'); doc.setFontSize(6.4); doc.setTextColor(...INDIGO_ESCURO);
-    doc.text(titulo.toUpperCase(), x + 6, y + 10.5);
-
-    const temQtd = colunas > 1;
-    const xQtd = x + largura - 34;
-    if (temQtd) {
-      doc.setFontSize(5.4); doc.setTextColor(...CINZA_CLARO);
-      doc.text('QTD', xQtd + 4, y + 10.5);
-    }
-
-    // Linhas (preenchidas ou em branco pra escrever à mão)
-    const alturaLinha = 14;
-    const quantas = Math.max(0, Math.floor((altura - 15) / alturaLinha));
-    for (let i = 0; i < quantas; i++) {
-      const ly = y + 15 + i * alturaLinha;
-      if (i > 0) { doc.setDrawColor(...BORDA); doc.line(x, ly, x + largura, ly); }
-      const item = linhas[i];
-      if (item) {
-        doc.setFont('Spectral', 'normal'); doc.setFontSize(7.6); doc.setTextColor(...TINTA);
-        doc.text(cortar(doc, item.nome || item, largura - (temQtd ? 44 : 12)), x + 6, ly + 9.5);
-        if (temQtd && item.qtd) {
-          doc.setFont('Spectral', 'bold');
-          doc.text(String(item.qtd), xQtd + 10, ly + 9.5);
-        }
-      }
-    }
-    if (temQtd) { doc.setDrawColor(...BORDA); doc.line(xQtd, y, xQtd, y + altura); }
-  }
-
-  function rodape(doc, p, y) {
-    const alturaBloco = H - y - M;
-    const gap = 10;
-    const larg = (LARG - gap * 2) / 3;
-    tabelaRodape(doc, 'Equipe de instalação', 1, (p.equipe || []), M, y, larg, alturaBloco);
-    tabelaRodape(doc, 'Ferramentas', 2, (p.ferramentas || []), M + larg + gap, y, larg, alturaBloco);
-    tabelaRodape(doc, 'Acessórios', 2, (p.acessorios || []), M + (larg + gap) * 2, y, larg, alturaBloco);
-  }
-
-  // ── Corpo: imagem em destaque + título do serviço ─────────────────────────
-  async function corpo(doc, p, yTopo, yBase) {
-    const altura = yBase - yTopo;
-    const largTitulo = LARG * 0.30;
-    const xImg = M + largTitulo + 14;
-    const largImg = LARG - largTitulo - 14;
-
-    // Título grande do serviço, à esquerda
-    const titulo = String(p.tituloServico || '').toUpperCase();
-    if (titulo) {
-      doc.setFont('Poppins', 'normal'); doc.setTextColor(...TINTA);
-      let fs = 26;
-      doc.setFontSize(fs);
-      let linhas = doc.splitTextToSize(titulo, largTitulo);
-      while (linhas.length * fs * 1.14 > altura * 0.55 && fs > 12) {
-        fs -= 1.5; doc.setFontSize(fs); linhas = doc.splitTextToSize(titulo, largTitulo);
-      }
-      doc.text(linhas, M, yTopo + 26);
-      var yDepoisTitulo = yTopo + 26 + linhas.length * fs * 1.14;
+    caixa(doc, xMeio, y0 + linha * 2, wMeio, linha);
+    if (modelo.endEntregaNoCabecalho) {
+      rotuloValor(doc, 'End:', p.endereco, xMeio + 8, y0 + linha * 2.5 + 4, wMeio * 0.52 - 10, 10.5);
+      doc.setFont('Poppins', 'normal'); doc.setFontSize(10.5); doc.setTextColor(...PRETO);
+      doc.text('Entrega:', xMeio + wMeio * 0.55, y0 + linha * 2.5 + 4);
+      doc.setTextColor(...VERMELHO);
+      doc.text(fmtData(p.dataEntrega), xMeio + wMeio * 0.55 + 52, y0 + linha * 2.5 + 4);
+    } else if (modelo.dataInicioEntrega) {
+      rotuloValor(doc, 'Data Início:', p.dataInicio || '', xMeio + 8, y0 + linha * 2.5 + 4, wMeio * 0.45 - 10, 10.5);
+      doc.setDrawColor(...BORDA); doc.line(xMeio + wMeio * 0.5, y0 + linha * 2, xMeio + wMeio * 0.5, y0 + altura);
+      doc.setFont('Poppins', 'normal'); doc.setFontSize(10.5); doc.setTextColor(...PRETO);
+      doc.text('ENTREGA:', xMeio + wMeio * 0.5 + 8, y0 + linha * 2.5 + 4);
+      doc.setTextColor(...VERMELHO);
+      doc.text(fmtData(p.dataEntrega), xMeio + wMeio * 0.5 + 68, y0 + linha * 2.5 + 4);
     } else {
-      var yDepoisTitulo = yTopo + 10;
+      rotuloValor(doc, 'Data de Entrega:', p.dataEntrega ? fmtData(p.dataEntrega) : '', xMeio + 8, y0 + linha * 2.5 + 4, wMeio - 16, 10.5);
     }
 
-    // Medidas do item, quando a prancha veio de um briefing
-    if (p.medidas) {
-      doc.setFont('Poppins', 'normal'); doc.setFontSize(6); doc.setTextColor(...CINZA_CLARO);
-      doc.text('MEDIDAS', M, yDepoisTitulo + 6);
-      doc.setFont('Spectral', 'bold'); doc.setFontSize(12); doc.setTextColor(...INDIGO_ESCURO);
-      const linhasMed = doc.splitTextToSize(String(p.medidas), largTitulo);
-      doc.text(linhasMed.slice(0, 3), M, yDepoisTitulo + 20);
-      yDepoisTitulo += 20 + linhasMed.slice(0, 3).length * 13;
+    // Selo do setor + texto de direitos
+    const selo = String(p.seloServico || p.setor || '').toUpperCase();
+    caixa(doc, xSelo, y0, wSelo, linha);
+    if (selo) {
+      doc.setFillColor(...(modelo.cor || MODELO_PADRAO.cor));
+      doc.rect(xSelo + 0.4, y0 + 0.4, wSelo - 0.8, linha - 0.8, 'F');
+      doc.setFont('Poppins', 'normal'); doc.setTextColor(...(modelo.corTexto || [255, 255, 255]));
+      let fs = 12;
+      doc.setFontSize(fs);
+      const linhasSelo = doc.splitTextToSize(selo, wSelo - 10);
+      while (linhasSelo.length > 2 && fs > 7) { fs -= 1; doc.setFontSize(fs); }
+      const ls = doc.splitTextToSize(selo, wSelo - 10).slice(0, 2);
+      const yBase = y0 + linha / 2 + (ls.length === 1 ? 4 : -1);
+      ls.forEach((l, i) => doc.text(l, xSelo + wSelo / 2, yBase + i * (fs + 1), { align: 'center' }));
     }
-    if (p.detalhe) {
-      doc.setFont('Spectral', 'normal'); doc.setFontSize(8.4); doc.setTextColor(...CINZA);
-      doc.text(doc.splitTextToSize(String(p.detalhe), largTitulo).slice(0, 4), M, yDepoisTitulo + 12);
+    caixa(doc, xSelo, y0 + linha, wSelo, altura - linha);
+    doc.setFont('Poppins', 'normal'); doc.setFontSize(4.9); doc.setTextColor(...PRETO);
+    const direitos = (cfg && cfg.textoDireitos) || '';
+    doc.splitTextToSize(direitos, wSelo - 10).slice(0, 6)
+      .forEach((l, i) => doc.text(l, xSelo + wSelo - 5, y0 + linha + 8 + i * 6.2, { align: 'right' }));
+
+    // Coluna da direita: data, prancha, O.S.
+    const dirs = [
+      [modelo.rotuloData || 'Data:', fmtData(p.data)],
+      ['Prancha:', p2(p.numero || 1) + '/' + p2(p.total || 1)],
+      ['Nº da OS:', String(p.osNumero || '').trim() || 'S/N']
+    ];
+    dirs.forEach((d, i) => {
+      caixa(doc, xDir, y0 + linha * i, wDir, linha);
+      const tam = (modelo.rotuloData === 'Data Export:' && i === 0) ? 8.6 : 10.5;
+      rotuloValor(doc, d[0], d[1], xDir + 7, y0 + linha * i + linha / 2 + 4, wDir - 12, tam);
+    });
+
+    return y0 + altura;
+  }
+
+  // ── Barra de atenção / linha endereço e obs ───────────────────────────────
+  function barraAtencao(doc, y) {
+    const alt = 26, wRot = 300;
+    doc.setFillColor(...VERMELHO);
+    doc.rect(0, y, wRot, alt, 'F');
+    doc.setFillColor(...AZUL_BARRA);
+    doc.rect(wRot, y, W - wRot, alt, 'F');
+    doc.setFont('Poppins', 'bold'); doc.setTextColor(255, 255, 255); doc.setFontSize(15);
+    doc.text('A T E N Ç Ã O', wRot / 2, y + 18, { align: 'center' });
+    doc.setFontSize(10);
+    doc.text('É obrigatório conferir se o tamanho do arquivo exportado corresponde ao tamanho especificado no layout.',
+      wRot + 14, y + 17);
+    return y + alt;
+  }
+
+  function linhaEnderecoObs(doc, p, y) {
+    const alt = 26, meio = W * 0.5;
+    caixa(doc, M, y, meio - M, alt);
+    caixa(doc, meio, y, W - M - meio, alt);
+    rotuloValor(doc, 'Endereço:', p.endereco, M + 8, y + 17, meio - M - 20, 11);
+    rotuloValor(doc, 'Obs:', p.obs, meio + 8, y + 17, W - M - meio - 20, 11);
+    return y + alt;
+  }
+
+  // ── Tabela de checklist do setor ──────────────────────────────────────────
+  function tabelaCheck(doc, tab, x, y) {
+    const wCheck = tab.semCheck ? 0 : 15;
+    const wRotulo = 128;
+    const wCol = 62;
+    const cols = tab.colunas || [];
+    const largura = wCheck + wRotulo + cols.length * wCol;
+    const hLinha = 13.5, hTitulo = 15;
+
+    // Título
+    caixa(doc, x, y, largura, hTitulo);
+    doc.setFont('Poppins', 'normal'); doc.setFontSize(7.6); doc.setTextColor(...PRETO);
+    doc.text(tab.titulo, x + wCheck + wRotulo / 2, y + 10.5, { align: 'center' });
+    // Cabeçalho das colunas extras fica na mesma faixa do título
+    cols.forEach((c, i) => {
+      const cx = x + wCheck + wRotulo + i * wCol;
+      caixa(doc, cx, y, wCol, hTitulo);
+      if (c) {
+        doc.setFontSize(6.6);
+        doc.text(c, cx + wCol / 2, y + 10, { align: 'center' });
+      }
+    });
+
+    let yy = y + hTitulo;
+    tab.itens.forEach((item, i) => {
+      if (!tab.semCheck) caixa(doc, x, yy, wCheck, hLinha);
+      const corFundo = tab.cores && tab.cores[i];
+      if (corFundo) {
+        doc.setFillColor(...corFundo);
+        doc.rect(x + wCheck, yy, wRotulo, hLinha, 'F');
+      }
+      caixa(doc, x + wCheck, yy, wRotulo, hLinha);
+      if (item) {
+        doc.setFont('Poppins', 'normal'); doc.setFontSize(7.4);
+        doc.setTextColor(...(corFundo ? [255, 255, 255] : PRETO));
+        doc.text(cortar(doc, item, wRotulo - 8), x + wCheck + wRotulo / 2, yy + 9.2, { align: 'center' });
+      }
+      cols.forEach((c, j) => caixa(doc, x + wCheck + wRotulo + j * wCol, yy, wCol, hLinha));
+      yy += hLinha;
+    });
+    return { altura: yy - y, largura };
+  }
+
+  // ── Carimbos ──────────────────────────────────────────────────────────────
+  function carimboUrgente(doc, x, y) {
+    doc.saveGraphicsState();
+    doc.setDrawColor(...VERMELHO); doc.setLineWidth(2.4);
+    doc.circle(x, y, 30, 'S');
+    doc.setLineWidth(1);
+    doc.circle(x, y, 26, 'S');
+    doc.setFont('Poppins', 'bold'); doc.setFontSize(13); doc.setTextColor(...VERMELHO);
+    doc.text('URGENTE!', x, y + 4.5, { align: 'center', angle: 8 });
+    doc.restoreGraphicsState();
+  }
+
+  function carimboEspelhado(doc, x, y) {
+    const AZUL = [41, 171, 226];
+    doc.setDrawColor(...AZUL); doc.setLineWidth(2.2);
+    doc.circle(x, y, 44, 'S');
+    doc.setLineWidth(1.1);
+    doc.circle(x, y, 34, 'S');
+    doc.setFont('Poppins', 'bold'); doc.setFontSize(9.5); doc.setTextColor(...AZUL);
+    doc.text('A R Q U I V O', x, y - 18, { align: 'center' });
+    doc.text('E S P E L H A D O', x, y + 30, { align: 'center' });
+    doc.setDrawColor(...AZUL); doc.setLineWidth(1);
+    doc.setLineDashPattern([2, 2], 0);
+    doc.rect(x - 20, y - 12, 20, 24);
+    doc.setLineDashPattern([], 0);
+    doc.setFillColor(...AZUL);
+    doc.rect(x + 1, y - 12, 20, 24, 'F');
+  }
+
+  // ── Rodapé de liberação ───────────────────────────────────────────────────
+  function rodapeLiberacao(doc, tipo, y) {
+    if (!tipo) return;
+    doc.setFont('Poppins', 'normal'); doc.setFontSize(8); doc.setTextColor(...PRETO);
+    const linha = (rotulo, x) => {
+      doc.text(rotulo, x, y);
+      const xi = x + doc.getTextWidth(rotulo) + 4;
+      doc.setDrawColor(...PRETO); doc.setLineWidth(0.7);
+      doc.line(xi, y + 1.5, xi + 108, y + 1.5);
+      doc.text('DATA:', xi + 116, y);
+      doc.line(xi + 148, y + 1.5, xi + 176, y + 1.5);
+      doc.text('/', xi + 179, y);
+      doc.line(xi + 184, y + 1.5, xi + 212, y + 1.5);
+      doc.text('/', xi + 215, y);
+      doc.line(xi + 220, y + 1.5, xi + 262, y + 1.5);
+      return xi + 262;
+    };
+    if (tipo === 'comercial-producao') {
+      const fim = linha('LIBERAÇÃO COMERCIAL:', M + 24);
+      doc.line(fim + 16, y - 8, fim + 16, y + 4);
+      linha('LIBERAÇÃO PRODUÇÃO:', fim + 32);
+    } else if (tipo === 'producao') {
+      linha('LIBERAÇÃO PRODUÇÃO:', W - M - 420);
+    } else if (tipo === 'tecnica-producao') {
+      // Duas caixinhas empilhadas, como no modelo
+      const x = W / 2 - 60, alt = 13, larg = 168;
+      [['LIBERAÇÃO TÉCNICA', 0], ['LIBERAÇÃO PRODUÇÃO', 1]].forEach(([rot, i]) => {
+        caixa(doc, x, y - 18 + i * alt, 16, alt);
+        caixa(doc, x + 16, y - 18 + i * alt, larg, alt);
+        doc.setFontSize(7.4);
+        doc.text(rot, x + 16 + larg / 2, y - 18 + i * alt + 9, { align: 'center' });
+      });
+    }
+  }
+
+  // ── Uma prancha ───────────────────────────────────────────────────────────
+  async function desenhar(doc, p, cfg) {
+    const modelo = modeloDe(p.seloServico || p.setor);
+    let y = cabecalho(doc, p, cfg, modelo);
+    if (modelo.atencao) y = barraAtencao(doc, y);
+    else if (modelo.enderecoObs) y = linhaEnderecoObs(doc, p, y);
+
+    const yCorpo = y + 6;
+    const yFimCorpo = H - 34;
+
+    // Checklists do setor, na lateral esquerda
+    let yTab = yCorpo + 4;
+    let larguraTabelas = 0;
+    (modelo.caixasSoltas || []).forEach(rot => {
+      caixa(doc, M + 4, yTab, 16, 16);
+      doc.setFont('Poppins', 'normal'); doc.setFontSize(8.4); doc.setTextColor(...PRETO);
+      doc.text(rot, M + 26, yTab + 11.5);
+      yTab += 24;
+      larguraTabelas = Math.max(larguraTabelas, 120);
+    });
+    for (const tab of (modelo.tabelas || [])) {
+      const r = tabelaCheck(doc, tab, M + 4, yTab);
+      yTab += r.altura + 12;
+      larguraTabelas = Math.max(larguraTabelas, r.largura);
+      if (yTab > yFimCorpo - 30) break; // não invade o rodapé
     }
 
-    // Imagem em destaque, encaixada sem distorcer
-    doc.setDrawColor(...BORDA); doc.setLineWidth(0.8);
-    doc.roundedRect(xImg, yTopo, largImg, altura, 5, 5, 'S');
+    // Área do desenho: à direita das tabelas
+    const xArte = M + 8 + (larguraTabelas ? larguraTabelas + 16 : 0);
+    const wArte = W - M - 8 - xArte;
+    const hArte = yFimCorpo - yCorpo - 8;
+
     if (p.imagem) {
       const dims = await medirImagem(p.imagem);
-      const prop = dims ? dims.h / dims.w : 0.75;
-      let w = largImg - 12, h = w * prop;
-      if (h > altura - 12) { h = altura - 12; w = h / prop; }
-      try {
-        doc.addImage(p.imagem, 'JPEG', xImg + (largImg - w) / 2, yTopo + (altura - h) / 2, w, h, undefined, 'FAST');
-      } catch {}
-    } else {
-      doc.setFont('Poppins', 'normal'); doc.setFontSize(9); doc.setTextColor(...CINZA_CLARO);
-      doc.text('Sem imagem', xImg + largImg / 2, yTopo + altura / 2, { align: 'center' });
+      const prop = dims ? dims.h / dims.w : 0.72;
+      let w = wArte, h = w * prop;
+      if (h > hArte) { h = hArte; w = h / prop; }
+      try { doc.addImage(p.imagem, 'JPEG', xArte + (wArte - w) / 2, yCorpo + (hArte - h) / 2, w, h, undefined, 'FAST'); } catch {}
     }
+
+    // Título do serviço e medidas, quando informados (vão sobre a área da arte)
+    if (p.tituloServico) {
+      doc.setFont('Poppins', 'bold'); doc.setTextColor(...PRETO);
+      let fs = 20; doc.setFontSize(fs);
+      const linhas = doc.splitTextToSize(String(p.tituloServico).toUpperCase(), wArte);
+      doc.text(linhas.slice(0, 2), xArte, yCorpo + 22);
+    }
+    if (p.medidas) {
+      doc.setFont('Poppins', 'normal'); doc.setFontSize(9); doc.setTextColor(...CINZA_TXT);
+      doc.text(doc.splitTextToSize(String(p.medidas), wArte).slice(0, 3), xArte, yFimCorpo - 26);
+    }
+
+    if (p.urgente) carimboUrgente(doc, W - 78, yCorpo + 56);
+    if ((modelo.selos || []).includes('espelhado')) carimboEspelhado(doc, W * 0.42, yFimCorpo - 130);
+    rodapeLiberacao(doc, modelo.rodape, H - 14);
   }
 
-  // ── Desenha UMA prancha na página atual ───────────────────────────────────
-  async function desenhar(doc, p, cfg) {
-    let y = cabecalho(doc, p, cfg);
-    y = faixaDados(doc, p, cfg, y);
-    y = linhaEndereco(doc, { ...p, textoDireitos: (cfg && cfg.textoDireitos) || '' }, y);
-    const alturaRodape = 92;
-    await corpo(doc, p, y + 10, H - M - alturaRodape - 10);
-    rodape(doc, p, H - M - alturaRodape);
-  }
-
-  // ── Gera o PDF com uma página por prancha ─────────────────────────────────
-  // pranchas: lista já montada (ver montarPrancha em app.js)
   async function gerarPdf(pranchas, cfg) {
     const doc = novoDoc();
     for (let i = 0; i < pranchas.length; i++) {
@@ -290,5 +490,5 @@ const PRANCHA = (() => {
     return doc;
   }
 
-  return { gerarPdf, desenhar, novoDoc, W, H };
+  return { gerarPdf, desenhar, novoDoc, modeloDe, setores: Object.keys(MODELOS), W, H };
 })();

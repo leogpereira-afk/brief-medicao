@@ -872,6 +872,7 @@ function abrirPreviaLote() {
       '<input type="text" inputmode="numeric" maxlength="10" placeholder="dd/mm/aaaa" data-pdata="' + i + '" value="' + esc(p.dataEntrega ? isoParaDataBr(p.dataEntrega) : '') + '"></div>' +
       '</div>' +
       '<div class="campo"><label>Obs</label><input type="text" data-pcampo="obs" data-pi="' + i + '" value="' + esc(p.obs) + '"></div>' +
+      '<label class="chip ' + (p.urgente ? 'marcado' : '') + '" data-urgente="' + i + '" style="margin-bottom:10px; display:inline-flex">🔴 Marcar URGENTE</label>' +
       '<div class="acoes-prancha">' +
       (p.imagem ? '<img class="thumb-prancha" src="' + p.imagem + '" alt="">' : '<span class="dica-campo">sem imagem</span>') +
       '<button class="botao mini suave" data-troca-img="' + i + '">Trocar foto</button>' +
@@ -895,6 +896,11 @@ function abrirPreviaLote() {
         if (chip) chip.textContent = el.value || 'sem selo';
       }
     };
+  });
+  $$('[data-urgente]', m).forEach(ch => ch.onclick = () => {
+    const i = Number(ch.dataset.urgente);
+    LOTE.itens[i].urgente = !LOTE.itens[i].urgente;
+    ch.classList.toggle('marcado', LOTE.itens[i].urgente);
   });
   $$('[data-pdata]', m).forEach(el => el.oninput = () => {
     el.value = mascaraData(el.value);
@@ -965,7 +971,7 @@ async function salvarLoteNoBriefing() {
     id: p.id, numero: p.numero, total: p.total,
     seloServico: p.seloServico, setor: p.setor || '', tituloServico: p.tituloServico,
     medidas: p.medidas, detalhe: p.detalhe || '', obs: p.obs,
-    dataEntrega: p.dataEntrega || '', imagemId: p.imagemId || null,
+    dataEntrega: p.dataEntrega || '', urgente: !!p.urgente, imagemId: p.imagemId || null,
     cliente: p.cliente, contato: p.contato, vendedor: p.vendedor, designer: p.designer,
     osNumero: p.osNumero, endereco: p.endereco, data: p.data,
     equipe: p.equipe || [], ferramentas: p.ferramentas || [], acessorios: p.acessorios || []
@@ -1598,7 +1604,7 @@ function htmlItensDaOS() {
   return (
     '<div class="card" style="border:1.5px solid var(--indigo)">' +
     '<div class="sub-secao" style="margin-bottom:4px">Itens da O.S. ' + esc(BRIEF.osNumero || '') + '</div>' +
-    '<p class="dica-campo" style="margin-bottom:10px">Vieram do sistema. Marque os que você vai medir e traga pro briefing — já entram com medida e quantidade preenchidas, é só conferir no local.</p>' +
+    '<p class="dica-campo" style="margin-bottom:10px">Vieram do sistema. Marque os que você vai medir e traga pro briefing: já entram com medida e quantidade preenchidas, é só conferir no local.</p>' +
     pendentes.map(({ it, i }) =>
       '<label class="linha-os-item">' +
       '<input type="checkbox" data-osidx="' + i + '"' + (OS_ITENS_DESMARCADOS.has(i) ? '' : ' checked') + '>' +

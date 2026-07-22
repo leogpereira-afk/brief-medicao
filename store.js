@@ -147,17 +147,20 @@ const STORE = (() => {
     empresa: {
       nome: 'Impresilk Soluções Visuais',
       instagram: '@impresilk',
-      whatsapp: '(38) 99999-9999',
-      telefone: '(38) 3221-0000',
-      endereco: 'Montes Claros - MG',
-      email: 'contato@impresilk.com.br'
+      whatsapp: '(38) 99878-0021',
+      telefone: '(38) 3223-5477',
+      endereco: 'Av. Feliciano Martins de Freitas, 127 | Vila Regina | Montes Claros - MG',
+      email: 'site@impresilk.com.br'
     },
     // Setores de produção: cada um marcado vira uma prancha
-    setoresProducao: ['Impressão', 'Recorte', 'Acabamento', 'Serralheria', 'Instalação'],
+    setoresProducao: ['Instalação', 'Router', 'Fibra letra caixa', 'Laser C02', 'Serralheria',
+      'Impressão lona', 'Impressão vinil', 'Impressão UV', 'Laser brindes', 'Ploter papel outdoor'],
     // Tipos de serviço do selo laranja
-    tiposServico: ['Instalação', 'Retirada', 'Manutenção', 'Impressão', 'Recorte', 'Acabamento', 'Serralheria', 'Entrega'],
+    tiposServico: ['Instalação', 'Router', 'Fibra letra caixa', 'Laser C02', 'Serralheria',
+      'Impressão lona', 'Impressão vinil', 'Impressão UV', 'Laser brindes', 'Ploter papel outdoor',
+      'Retirada', 'Manutenção', 'Entrega'],
     // Texto fixo de direitos autorais no rodapé do cabeçalho
-    textoDireitos: 'Este layout é propriedade da Impresilk Soluções Visuais. Proibida a reprodução total ou parcial sem autorização.'
+    textoDireitos: 'Este desenho, protegido pela legislação de direitos autorais, é de propriedade exclusiva da empresa Impresilk Comunicação Visual. Não pode ser usado, copiado ou cedido, de forma parcial ou integral, fora dos termos contratuais.'
   };
 
   function getCFG() {
