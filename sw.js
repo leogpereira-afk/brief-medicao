@@ -3,11 +3,11 @@
 //
 // DISCIPLINA: bump no CACHE (v1 → v2 → …) A CADA deploy, senão os aparelhos
 // ficam presos na versão antiga.
-const CACHE = 'brief-shell-v10';
+const CACHE = 'brief-shell-v11';
 const SHELL = [
   './', 'index.html', 'config.js', 'store.js', 'app.js', 'pdf.js', 'styles.css', 'sw.js',
   'manifest.webmanifest', 'logo-impresilk.png', 'logo-impresilk-branco.png',
-  'libs/jspdf.umd.min.js', 'libs/pdf-assets.js',
+  'libs/jspdf.umd.min.js', 'libs/pdf-assets.js', 'libs/zip.js',
   'fonts/Poppins-500.woff2', 'fonts/Poppins-600.woff2', 'fonts/Poppins-700.woff2',
   'fonts/Spectral-400.woff2', 'fonts/Spectral-600.woff2',
   'icons/icon-192.png', 'icons/icon-512.png', 'icons/apple-touch-icon.png'

@@ -126,6 +126,17 @@ const STORE = (() => {
     },
     // Listas editáveis no painel do admin (tipos vindos da spec + grupos da ficha de visita)
     tiposItem: ['Letreiro frontal', 'Fachada em lona', 'Fachada ACM', 'Letreiro direto na parede', 'Luminoso', 'Totem', 'Adesivo', 'Adesivo de veículo', 'Papel de parede', 'Placa', 'Banner', 'Envelopamento', 'Outro'],
+    // Quais fotos são OBRIGATÓRIAS em cada tipo de item. Adesivo de parede
+    // resolve com uma foto; letreiro e totem precisam do conjunto todo.
+    // Tipo que não estiver aqui usa fotosPadrao. Editável no painel do admin.
+    fotosPadrao: ['fachada', 'close', 'escala'],
+    fotosPorTipo: {
+      'Adesivo': ['fachada'],
+      'Papel de parede': ['fachada'],
+      'Adesivo de veículo': ['fachada'],
+      'Banner': ['fachada'],
+      'Placa': ['fachada', 'close']
+    },
     superficies: ['Alvenaria', 'Drywall', 'Madeira', 'Metal', 'Pedra lisa', 'Pedra irregular', 'Vidro', 'Concreto aparente', 'Sinalização/ACM existente', 'Telha', 'Outro'],
     // Webhook (n8n) chamado pelo servidor quando um briefing é enviado pro design
     webhookUrl: ''

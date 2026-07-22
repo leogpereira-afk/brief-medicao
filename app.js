@@ -208,9 +208,21 @@ function abrirLightbox(fotos, inicio) {
     '<button class="fechar">✕</button>' +
     '<img alt="Foto ampliada">' +
     '<div class="legenda"></div>' +
-    (fotos.length > 1 ? '<div class="navegar"><button class="ant">←</button><button class="prox">→</button></div>' : '');
+    '<div class="navegar">' +
+    (fotos.length > 1 ? '<button class="ant">←</button>' : '') +
+    '<button class="baixar" title="Baixar esta foto">📥 Baixar</button>' +
+    (fotos.length > 1 ? '<button class="prox">→</button>' : '') +
+    '</div>';
   const img = $('img', lb);
   const leg = $('.legenda', lb);
+  $('.baixar', lb).onclick = () => {
+    if (!img.src || img.src.length < 30) return;
+    const f = fotos[idx];
+    const a = document.createElement('a');
+    a.href = img.src;
+    a.download = arquivoSeguro(f.legenda || 'foto') + '.jpg';
+    document.body.appendChild(a); a.click(); a.remove();
+  };
   async function mostrar() {
     const f = fotos[idx];
     leg.textContent = (f.legenda || '') + '  (' + (idx + 1) + ' de ' + fotos.length + ')';
@@ -525,16 +537,27 @@ function novoItem() {
   };
 }
 
-// Item 100% pronto: nome, medida e as 3 fotos obrigatórias.
-function itemCompleto(item) {
-  if (!nomeItem(item) || !temMedida(item)) return false;
-  return FOTOS_ITEM.filter(f => f.obrig)
-    .every(f => (item.fotos || []).some(x => x.tipo === f.tipo && !x.arquivada));
+// Quais fotos são obrigatórias NESTE item: varia por tipo (adesivo de parede
+// pede só a foto da parede; letreiro pede o conjunto todo). Configurável no
+// painel do admin; tipo sem regra própria usa o padrão.
+function fotosObrigatoriasDo(item, cfg) {
+  const c = cfg || STORE.getCFG();
+  const porTipo = c.fotosPorTipo || {};
+  const tipo = item && item.tipo;
+  const lista = (tipo && porTipo[tipo]) || c.fotosPadrao || ['fachada', 'close', 'escala'];
+  return FOTOS_ITEM.filter(f => lista.includes(f.tipo)).map(f => f.tipo);
 }
-function progressoItem(item) {
-  const fotosOk = FOTOS_ITEM.filter(f => f.obrig)
-    .filter(f => (item.fotos || []).some(x => x.tipo === f.tipo && !x.arquivada)).length;
-  return { fotosOk, fotosTotal: FOTOS_ITEM.filter(f => f.obrig).length, medidaOk: temMedida(item), nomeOk: !!nomeItem(item) };
+
+// Item 100% pronto: nome, medida e as fotos exigidas pelo tipo dele.
+function itemCompleto(item, cfg) {
+  if (!nomeItem(item) || !temMedida(item)) return false;
+  return fotosObrigatoriasDo(item, cfg)
+    .every(t => (item.fotos || []).some(x => x.tipo === t && !x.arquivada));
+}
+function progressoItem(item, cfg) {
+  const exigidas = fotosObrigatoriasDo(item, cfg);
+  const fotosOk = exigidas.filter(t => (item.fotos || []).some(x => x.tipo === t && !x.arquivada)).length;
+  return { fotosOk, fotosTotal: exigidas.length, medidaOk: temMedida(item), nomeOk: !!nomeItem(item) };
 }
 
 // Dados essenciais do cliente: enquanto faltarem, a etapa de itens fica travada
@@ -588,12 +611,16 @@ function pendencias(b) {
   if (!b.tipoMedicao) p.push('Tipo de medição (Orçamento ou Execução)');
   if (!(b.itens || []).length) p.push('Pelo menos um item medido');
   if (!b.visitaConcluida) p.push('Marcar "Visita concluída" na etapa 4');
+  const cfg = STORE.getCFG();
   (b.itens || []).forEach((it, i) => {
     const n = 'Item ' + (i + 1) + (nomeItem(it) ? ' (' + nomeItem(it) + ')' : '');
     if (!nomeItem(it)) p.push(n + ': nome do item');
     if (!temMedida(it)) p.push(n + ': largura e altura');
-    FOTOS_ITEM.filter(f => f.obrig).forEach(f => {
-      if (!(it.fotos || []).some(x => x.tipo === f.tipo && !x.arquivada)) p.push(n + ': foto ' + f.rotulo.toLowerCase());
+    fotosObrigatoriasDo(it, cfg).forEach(t => {
+      if (!(it.fotos || []).some(x => x.tipo === t && !x.arquivada)) {
+        const def = FOTOS_ITEM.find(f => f.tipo === t);
+        p.push(n + ': foto ' + (def ? def.rotulo.toLowerCase() : t));
+      }
     });
   });
   return p;
@@ -932,9 +959,10 @@ function htmlItem(item, idx, cfg) {
   const dicas = cfg.dicas || {};
   const marcadas = item.superficies || [];
   const area = areaItem(item);
-  const completo = itemCompleto(item);
+  const completo = itemCompleto(item, cfg);
   const recolhido = ITENS_RECOLHIDOS.has(item.id);
-  const p = progressoItem(item);
+  const p = progressoItem(item, cfg);
+  const exigidas = fotosObrigatoriasDo(item, cfg);
   const resumo = completo
     ? 'Completo · ' + (area > 0 ? fmtM2(area) : '')
     : [p.nomeOk ? '' : 'falta nome', p.medidaOk ? '' : 'falta medida',
@@ -992,13 +1020,17 @@ function htmlItem(item, idx, cfg) {
       : '') +
     '</div>' +
 
-    '<div class="campo"><label>Fotos <button class="botao mini fantasma" data-manual="foto" style="min-height:32px; padding:4px 10px; margin-left:6px">?</button></label>' +
+    '<div class="campo"><label>Fotos ' +
+    '<span class="dica-campo" style="font-weight:400">' +
+    (exigidas.length === 1 ? '(1 obrigatória neste tipo)' : '(' + exigidas.length + ' obrigatórias neste tipo)') + '</span>' +
+    '<button class="botao mini fantasma" data-manual="foto" style="min-height:32px; padding:4px 10px; margin-left:6px">?</button></label>' +
     '<div class="grade-fotos">' +
     FOTOS_ITEM.map(def => {
       const f = (item.fotos || []).find(x => x.tipo === def.tipo && !x.arquivada);
+      const obrig = exigidas.includes(def.tipo);
       return (
-        '<div class="slot-foto ' + (f ? 'cheio' : '') + '">' +
-        '<div class="rotulo">' + esc(def.rotulo) + (def.obrig ? ' <span class="obrig">*</span>' : '') + '</div>' +
+        '<div class="slot-foto ' + (f ? 'cheio' : '') + (obrig ? '' : ' opcional') + '">' +
+        '<div class="rotulo">' + esc(def.rotulo) + (obrig ? ' <span class="obrig">*</span>' : '') + '</div>' +
         (f
           ? '<img class="thumb" data-foto-id="' + esc(f.id) + '" data-galeria="item:' + item.id + '" alt="' + esc(def.rotulo) + '">' +
             '<div class="acoes"><button class="botao mini suave" data-trocar-foto="' + def.tipo + '">Trocar</button>' +
@@ -1706,6 +1738,7 @@ function renderDetalhe(app) {
     '<div class="card"><div class="sub-secao">Ações</div>' +
     '<div style="display:flex; flex-wrap:wrap; gap:8px">' +
     '<button class="botao mini" id="btn-pdf-brief">📄 PDF do briefing</button>' +
+    '<button class="botao mini suave" id="btn-baixar-fotos">📥 Baixar todas as fotos (.zip)</button>' +
     '<button class="botao mini fantasma" id="btn-ficha-det">🖨 Ficha de visita (PDF)</button>' +
     (podeGerir || meu ? '<button class="botao mini suave" id="btn-vincular-os">' + (semOS ? '🔗 Vincular O.S.' : '🔗 Trocar O.S.') + '</button>' : '') +
     (SESSAO.papel === 'admin' && !b.apagadoEm ? '<button class="botao mini perigo" id="btn-lixeira">🗑 Mover pra lixeira</button>' : '') +
@@ -1744,7 +1777,9 @@ function renderDetalhe(app) {
     (b.itens || []).map((it, i) =>
       '<div class="card"><div class="cabeca" style="display:flex; justify-content:space-between; align-items:center; gap:8px; margin-bottom:8px">' +
       '<h3 class="fonte-titulo" style="color:var(--indigo-escuro)">Item ' + (i + 1) + ': ' + esc(nomeItem(it) || 'sem nome') + '</h3>' +
-      '<button class="botao mini suave" data-pdf-item="' + it.id + '">📄 PDF do item</button></div>' +
+      '<div style="display:flex; gap:6px; flex-wrap:wrap">' +
+      '<button class="botao mini suave" data-pdf-item="' + it.id + '">📄 PDF do item</button>' +
+      '<button class="botao mini fantasma" data-zip-item="' + it.id + '">📥 Fotos</button></div></div>' +
       (it.detalheServico ? '<p class="dica-campo" style="margin-bottom:8px">' + esc(it.detalheServico) + '</p>' : '') +
       '<table class="tabela"><tr><th>Medida</th><th>Largura</th><th>Altura</th><th>Área</th></tr>' +
       (it.medidas || []).map((m, mi) =>
@@ -1823,9 +1858,14 @@ function renderDetalhe(app) {
   // Ações
   $('#btn-pdf-brief').onclick = () => exportarPdfBriefing(b);
   $('#btn-ficha-det').onclick = () => exportarFichaVisita(b);
+  $('#btn-baixar-fotos').onclick = () => baixarFotosDoBriefing(b);
   $$('[data-pdf-item]').forEach(bt => bt.onclick = () => {
     const item = (b.itens || []).find(i => i.id === bt.dataset.pdfItem);
     if (item) exportarPdfItem(b, item);
+  });
+  $$('[data-zip-item]').forEach(bt => bt.onclick = () => {
+    const item = (b.itens || []).find(i => i.id === bt.dataset.zipItem);
+    if (item) baixarFotosDoBriefing(b, item);
   });
   const sel = $('#sel-status');
   if (sel) sel.onchange = () => {
@@ -2115,6 +2155,21 @@ function adminConfig(alvo) {
       '<div class="campo"><label>' + esc(s) + '</label>' +
       '<textarea rows="2" data-dica="' + esc(s) + '">' + esc((cfg.dicas || {})[s] || '') + '</textarea></div>'
     ).join('') + '</div>' +
+    '<div class="card"><div class="sub-secao">Fotos obrigatórias por tipo de item</div>' +
+    '<p class="dica-campo" style="margin-bottom:12px">Marque o que o vendedor é obrigado a fotografar em cada tipo. Adesivo de parede costuma resolver com uma foto só; letreiro e totem pedem o conjunto. As outras fotos continuam disponíveis como opcionais.</p>' +
+    '<div class="tabela-fotos">' +
+    '<div class="linha-fotos cabeca-fotos"><span>Tipo de item</span>' +
+    FOTOS_ITEM.map(f => '<span>' + esc(f.rotulo.replace(' (se substituição)', '')) + '</span>').join('') + '</div>' +
+    (cfg.tiposItem || []).map(t => {
+      const marcadas = (cfg.fotosPorTipo || {})[t] || cfg.fotosPadrao || [];
+      return '<div class="linha-fotos"><span class="nome-tipo">' + esc(t) + '</span>' +
+        FOTOS_ITEM.map(f =>
+          '<span><input type="checkbox" data-fototipo="' + esc(t) + '" data-foto="' + f.tipo + '"' +
+          (marcadas.includes(f.tipo) ? ' checked' : '') + '></span>'
+        ).join('') + '</div>';
+    }).join('') +
+    '</div></div>' +
+
     '<div class="card"><div class="sub-secao">Listas</div>' +
     '<div class="campo"><label>Tipos de item (um por linha)</label>' +
     '<textarea rows="6" id="cf-tipos">' + esc((cfg.tiposItem || []).join('\n')) + '</textarea></div>' +
@@ -2147,6 +2202,14 @@ function adminConfig(alvo) {
     const superficies = $('#cf-superficies').value.split('\n').map(s => s.trim()).filter(Boolean);
     if (tipos.length) cfg2.tiposItem = tipos;
     if (superficies.length) cfg2.superficies = superficies;
+    // Fotos obrigatórias por tipo
+    const porTipo = {};
+    $$('[data-fototipo]', alvo).forEach(cb => {
+      const t = cb.dataset.fototipo;
+      if (!porTipo[t]) porTipo[t] = [];
+      if (cb.checked) porTipo[t].push(cb.dataset.foto);
+    });
+    if (Object.keys(porTipo).length) cfg2.fotosPorTipo = porTipo;
     cfg2.webhookUrl = $('#cf-webhook').value.trim();
     STORE.saveCFG(cfg2, SESSAO.nome);
     toast('Configurações salvas ✓ (sincronizam pra equipe)', 'sucesso');
@@ -2221,6 +2284,22 @@ async function adminIntegracao(alvo) {
 
 /* ══════════════════ PDF (carregamento preguiçoso) ══════════════════ */
 
+function carregarScript(src) {
+  return new Promise((resolve, reject) => {
+    const s = document.createElement('script');
+    s.src = src;
+    s.onload = resolve;
+    s.onerror = () => reject(new Error('Falha ao carregar ' + src));
+    document.head.appendChild(s);
+  });
+}
+
+let _zipCarregado = null;
+function ensureZip() {
+  if (!_zipCarregado) _zipCarregado = carregarScript('libs/zip.js');
+  return _zipCarregado;
+}
+
 let _pdfCarregado = null;
 function ensurePdfLibs() {
   if (_pdfCarregado) return _pdfCarregado;
@@ -2238,6 +2317,82 @@ function ensurePdfLibs() {
     proximo();
   });
   return _pdfCarregado;
+}
+
+/* ══════════════════ Arquivos das fotos (para o designer) ══════════════════ */
+
+function nomeArquivoFoto(b, idxItem, item, tipoFoto, ext) {
+  const def = FOTOS_ITEM.find(f => f.tipo === tipoFoto);
+  const rotulo = def ? arquivoSeguro(def.rotulo.replace(' (se substituição)', '')) : tipoFoto;
+  const nomeIt = arquivoSeguro(nomeItem(item) || 'item');
+  return 'item-' + pad2(idxItem + 1) + '-' + nomeIt + '-' + rotulo + '.' + (ext || 'jpg');
+}
+
+function pastaDoBriefing(b) {
+  return (b.numeroBrief ? 'brief-' + padBrief(b.numeroBrief) : 'brief') + '-' + arquivoSeguro(b.cliente);
+}
+
+function baixarBlob(blob, nome) {
+  const a = document.createElement('a');
+  a.href = URL.createObjectURL(blob);
+  a.download = nome;
+  document.body.appendChild(a);
+  a.click();
+  a.remove();
+  setTimeout(() => URL.revokeObjectURL(a.href), 8000);
+}
+
+// Junta todas as fotos do briefing (itens + croquis) num zip com nomes que já
+// dizem de qual item e de que ângulo é cada uma.
+async function baixarFotosDoBriefing(b, apenasItem) {
+  const alvo = apenasItem ? [apenasItem] : (b.itens || []);
+  toast('Preparando as fotos…');
+  try {
+    await ensureZip();
+    const arquivos = [];
+    const pasta = pastaDoBriefing(b);
+    let faltando = 0;
+
+    for (const item of alvo) {
+      const i = (b.itens || []).indexOf(item);
+      for (const f of (item.fotos || [])) {
+        if (f.arquivada) continue;
+        const b64 = await STORE.pullPhoto(f.id);
+        if (!b64) { faltando++; continue; }
+        arquivos.push({ nome: pasta + '/' + nomeArquivoFoto(b, i < 0 ? 0 : i, item, f.tipo), dados: ZIP.base64ParaBytes(b64) });
+      }
+    }
+    if (!apenasItem) {
+      for (let ci = 0; ci < (b.croquis || []).length; ci++) {
+        const c = b.croquis[ci];
+        if (c.arquivada) continue;
+        const b64 = await STORE.pullPhoto(c.id);
+        if (!b64) { faltando++; continue; }
+        arquivos.push({ nome: pasta + '/desenho-' + pad2(ci + 1) + '.jpg', dados: ZIP.base64ParaBytes(b64) });
+      }
+    }
+
+    if (!arquivos.length) {
+      toast(faltando ? 'As fotos ainda não sincronizaram neste aparelho' : 'Não há fotos para baixar', 'erro');
+      return;
+    }
+    const zip = ZIP.criar(arquivos, new Date(b.dataHora || Date.now()));
+    baixarBlob(zip, pasta + (apenasItem ? '-item' : '') + '-fotos.zip');
+    toast(arquivos.length + ' foto(s) baixadas' + (faltando ? ' · ' + faltando + ' ainda não sincronizada(s)' : ''), 'sucesso');
+  } catch (e) {
+    console.error(e);
+    toast('Não consegui montar o arquivo: ' + e.message, 'erro');
+  }
+}
+
+// Uma foto só, direto da galeria
+async function baixarUmaFoto(b, item, f) {
+  const b64 = await STORE.pullPhoto(f.id);
+  if (!b64) { toast('Foto ainda não sincronizada neste aparelho', 'erro'); return; }
+  await ensureZip();
+  const i = (b.itens || []).indexOf(item);
+  const nome = item ? nomeArquivoFoto(b, i < 0 ? 0 : i, item, f.tipo) : 'desenho.jpg';
+  baixarBlob(new Blob([ZIP.base64ParaBytes(b64)], { type: 'image/jpeg' }), pastaDoBriefing(b) + '-' + nome);
 }
 
 async function exportarPdfBriefing(b) {
