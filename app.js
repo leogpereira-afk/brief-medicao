@@ -1718,6 +1718,9 @@ function renderDetalhe(app) {
   const meu = b.vendedorUsuario === SESSAO.usuario;
   const semOS = !String(b.osNumero || '').trim();
   const o = b.obsGerais || {};
+  // Arquivos e PDF do briefing só depois da visita concluída. Briefing já
+  // enviado também vale: os antigos foram enviados antes deste carimbo existir.
+  const liberado = !!b.visitaConcluida || b.situacao === 'enviado';
 
   const linha = (dt, dd) => dd ? '<div class="dupla-dado"><dt>' + dt + '</dt><dd>' + dd + '</dd></div>' : '';
 
@@ -1736,9 +1739,14 @@ function renderDetalhe(app) {
 
     // Ações
     '<div class="card"><div class="sub-secao">Ações</div>' +
+    (liberado
+      ? ''
+      : '<div class="aviso amarelo" style="margin-top:0">🔒 O PDF e as fotos liberam depois que a visita for concluída. ' +
+        'Até lá a medida ainda pode mudar, e nada deve sair pra produção.</div>') +
     '<div style="display:flex; flex-wrap:wrap; gap:8px">' +
-    '<button class="botao mini" id="btn-pdf-brief">📄 PDF do briefing</button>' +
-    '<button class="botao mini suave" id="btn-baixar-fotos">📥 Baixar todas as fotos (.zip)</button>' +
+    '<button class="botao mini" id="btn-pdf-brief"' + (liberado ? '' : ' disabled') + '>📄 PDF do briefing</button>' +
+    '<button class="botao mini suave" id="btn-baixar-fotos"' + (liberado ? '' : ' disabled') + '>📥 Baixar todas as fotos (.zip)</button>' +
+    // A ficha é o papel que o vendedor leva PRA visita: nunca pode ficar travada
     '<button class="botao mini fantasma" id="btn-ficha-det">🖨 Ficha de visita (PDF)</button>' +
     (podeGerir || meu ? '<button class="botao mini suave" id="btn-vincular-os">' + (semOS ? '🔗 Vincular O.S.' : '🔗 Trocar O.S.') + '</button>' : '') +
     (SESSAO.papel === 'admin' && !b.apagadoEm ? '<button class="botao mini perigo" id="btn-lixeira">🗑 Mover pra lixeira</button>' : '') +
@@ -1778,8 +1786,8 @@ function renderDetalhe(app) {
       '<div class="card"><div class="cabeca" style="display:flex; justify-content:space-between; align-items:center; gap:8px; margin-bottom:8px">' +
       '<h3 class="fonte-titulo" style="color:var(--indigo-escuro)">Item ' + (i + 1) + ': ' + esc(nomeItem(it) || 'sem nome') + '</h3>' +
       '<div style="display:flex; gap:6px; flex-wrap:wrap">' +
-      '<button class="botao mini suave" data-pdf-item="' + it.id + '">📄 PDF do item</button>' +
-      '<button class="botao mini fantasma" data-zip-item="' + it.id + '">📥 Fotos</button></div></div>' +
+      '<button class="botao mini suave" data-pdf-item="' + it.id + '"' + (liberado ? '' : ' disabled') + '>📄 PDF do item</button>' +
+      '<button class="botao mini fantasma" data-zip-item="' + it.id + '"' + (liberado ? '' : ' disabled') + '>📥 Fotos</button></div></div>' +
       (it.detalheServico ? '<p class="dica-campo" style="margin-bottom:8px">' + esc(it.detalheServico) + '</p>' : '') +
       '<table class="tabela"><tr><th>Medida</th><th>Largura</th><th>Altura</th><th>Área</th></tr>' +
       (it.medidas || []).map((m, mi) =>
@@ -2345,6 +2353,10 @@ function baixarBlob(blob, nome) {
 // Junta todas as fotos do briefing (itens + croquis) num zip com nomes que já
 // dizem de qual item e de que ângulo é cada uma.
 async function baixarFotosDoBriefing(b, apenasItem) {
+  if (!b.visitaConcluida && b.situacao !== 'enviado') {
+    toast('Conclua a visita antes de baixar os arquivos', 'erro');
+    return;
+  }
   const alvo = apenasItem ? [apenasItem] : (b.itens || []);
   toast('Preparando as fotos…');
   try {
@@ -2395,7 +2407,16 @@ async function baixarUmaFoto(b, item, f) {
   baixarBlob(new Blob([ZIP.base64ParaBytes(b64)], { type: 'image/jpeg' }), pastaDoBriefing(b) + '-' + nome);
 }
 
+// Guarda comum do PDF: nada que vá pra produção ou pro cliente sai antes de a
+// visita estar concluída (a ficha de visita é exceção, ela é PRA visita).
+function podeExportar(b) {
+  if (b && (b.visitaConcluida || b.situacao === 'enviado')) return true;
+  toast('Conclua a visita antes de exportar', 'erro');
+  return false;
+}
+
 async function exportarPdfBriefing(b) {
+  if (!podeExportar(b)) return;
   toast('Gerando o PDF do briefing…');
   try {
     await ensurePdfLibs();
@@ -2405,6 +2426,7 @@ async function exportarPdfBriefing(b) {
 }
 
 async function exportarPdfItem(b, item) {
+  if (!podeExportar(b)) return;
   toast('Gerando o PDF do item…');
   try {
     await ensurePdfLibs();
