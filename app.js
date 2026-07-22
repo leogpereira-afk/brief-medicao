@@ -916,11 +916,13 @@ function htmlItem(item, idx, cfg) {
     '<div class="cabeca">' +
     '<button class="alternar-item" data-alternar="' + item.id + '" aria-expanded="' + (!recolhido) + '">' +
     '<span class="seta">' + (recolhido ? '▸' : '▾') + '</span>' +
+    '<span class="info-item">' +
     '<span class="titulo-item">' + (completo ? '✅ ' : '') + 'Item ' + (idx + 1) +
     (nomeItem(item) ? ' · ' + esc(nomeItem(item)) : '') + '</span>' +
-    '<span class="resumo-chip">' + esc(resumo) + '</span>' +
-    '</button>' +
-    '<button class="botao mini perigo" data-remover-item="' + item.id + '">Remover</button></div>' +
+    (resumo ? '<span class="resumo-chip">' + esc(resumo) + '</span>' : '') +
+    '</span></button>' +
+    '<button class="botao mini perigo botao-remover" data-remover-item="' + item.id + '" title="Remover item">' +
+    '🗑<span class="rotulo-remover"> Remover</span></button></div>' +
 
     '<div class="corpo-item">' +
     (item.origemOS ? '<div class="aviso indigo" style="margin-top:0">Veio da O.S. ' + esc(BRIEF.osNumero || '') + '. Confira as medidas no local.</div>' : '') +

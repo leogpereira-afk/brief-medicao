@@ -209,13 +209,21 @@ input:focus, select:focus, textarea:focus { outline: none; border-color: var(--i
   font-family: 'Poppins'; font-weight: 600; color: var(--indigo-escuro); font-size: 1.02rem;
 }
 .alternar-item .seta { color: var(--cinza); font-size: .9rem; flex: 0 0 auto; }
-.alternar-item .titulo-item { white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+/* No celular o nome fica em cima e o resumo embaixo, pra não cortar o nome do item */
+.alternar-item .info-item { display: flex; flex-direction: column; align-items: flex-start; gap: 3px; min-width: 0; flex: 1; }
+.alternar-item .titulo-item { max-width: 100%; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
 .card-item.completo .alternar-item { color: var(--ok); }
 .alternar-item .resumo-chip {
   font-family: 'Poppins'; font-weight: 500; font-size: .72rem; color: var(--cinza);
-  background: var(--indigo-8); padding: 3px 9px; border-radius: 999px; white-space: nowrap; flex: 0 0 auto;
+  background: var(--indigo-8); padding: 3px 9px; border-radius: 999px; white-space: nowrap;
 }
 .card-item.completo .alternar-item .resumo-chip { background: var(--ok-bg); color: var(--ok); }
+.botao-remover { flex: 0 0 auto; }
+.botao-remover .rotulo-remover { display: none; }
+@media (min-width: 700px) {
+  .alternar-item .info-item { flex-direction: row; align-items: center; gap: 10px; }
+  .botao-remover .rotulo-remover { display: inline; }
+}
 
 /* Itens que vieram da O.S. */
 .linha-os-item {
