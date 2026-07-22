@@ -187,9 +187,13 @@ const PDF = (() => {
       ['Telefone', b.telefone], ['Responsável', b.responsavel],
       ['O.S.', String(b.osNumero || '').trim() || 'SEM O.S. por enquanto'], ['Serviço da O.S.', b.osServico],
       ['Tipo de medição', b.tipoMedicao], ['Natureza', b.naturezaServico],
-      ['Ambiente', b.ambiente], ['Status', b.situacao === 'enviado' ? b.status : 'Rascunho'],
+      ['Ambiente', (b.ambientes || []).join(' e ')], ['Status', b.situacao === 'enviado' ? b.status : 'Rascunho'],
       ['Vendedor', b.vendedor], ['Quem mediu', b.quemMediu],
-      ['Data da visita', fmtDataHoraLocal(b.dataHora)], ['Enviado em', b.enviadoEm ? fmtDataHoraLocal(b.enviadoEm) : '']
+      ['Data da visita', fmtDataHoraLocal(b.dataHora)],
+      ['Data da medida', b.dataMedicao ? fmtDataLocal(b.dataMedicao) : ''],
+      ['Visita concluída por', b.visitaConcluida ? b.visitaConcluida.por : ''],
+      ['Visita concluída em', b.visitaConcluida ? fmtDataHoraLocal(b.visitaConcluida.em) : ''],
+      ['Enviado em', b.enviadoEm ? fmtDataHoraLocal(b.enviadoEm) : '']
     ];
   }
 
@@ -226,6 +230,7 @@ const PDF = (() => {
     tituloSecao(doc, c, 'Item ' + (indice + 1) + ' · ' + nomeDoItem(item));
     gradeDados(doc, c, [
       ['Detalhe do serviço', item.detalheServico],
+      ['Quantidade', item.quantidade && String(item.quantidade) !== '1' ? item.quantidade + ' peças' : ''],
       ['Altura de instalação', item.alturaInstalacao ? item.alturaInstalacao + ' cm do chão até a base' : ''],
       ['Superfícies', (item.superficies || []).join(', ') + (item.superficieOutra ? ' (' + item.superficieOutra + ')' : '')],
       ['Observação do item', item.obs]
@@ -248,8 +253,6 @@ const PDF = (() => {
       ['Ponto', o.pontoTipo],
       ['Serviços extras', (o.servicosExtras || []).join(', ')],
       ['Prazo desejado', o.prazo],
-      ['Arte em alta resolução', o.arteAlta], ['Projeto 3D', o.projeto3D],
-      ['Budget', o.budget], ['Forma de pagamento', o.formaPagamento],
       ['Equipe estimada', o.equipeInstalacao], ['Tempo de execução', o.tempoExecucao],
       ['Briefing do cliente', o.briefingCliente]
     ];
@@ -321,22 +324,48 @@ const PDF = (() => {
     doc.save('item-' + (b.numeroBrief ? String(b.numeroBrief).padStart(4, '0') + '-' : '') + nomeArquivo(nomeDoItem(item)) + '-' + nomeArquivo(b.cliente) + '.pdf');
   }
 
+  // Cabeçalho azul da ficha: leva vendedor, Nº O.S., Nº brief e data, para que
+  // a folha impressa já se identifique sozinha na prancheta.
+  function cabecalhoFicha(doc, b, rotuloExtra) {
+    const H_BARRA = 74;
+    doc.setFillColor(...INDIGO);
+    doc.rect(0, 0, W, H_BARRA, 'F');
+    doc.setFillColor(...INDIGO_ESCURO);
+    doc.rect(0, H_BARRA - 5, W, 5, 'F');
+
+    doc.setFont('Poppins'); doc.setTextColor(255, 255, 255);
+    doc.setFontSize(16);
+    doc.text('FICHA DE VISITA TÉCNICA', M, 27);
+    doc.setFontSize(8);
+    doc.text('Impresilk · Soluções Visuais' + (rotuloExtra ? '  ·  ' + rotuloExtra : ''), M, 40);
+
+    // Nº do brief em destaque à direita
+    const nb = b && b.numeroBrief ? 'Nº ' + String(b.numeroBrief).padStart(4, '0') : 'Nº ____';
+    doc.setFontSize(15);
+    doc.text(nb, W - M, 27, { align: 'right' });
+
+    // Faixa de dados dentro da barra azul
+    const dados = [
+      'Vendedor: ' + ((b && b.vendedor) || '____________________'),
+      'O.S.: ' + ((b && String(b.osNumero || '').trim()) || '________'),
+      'Data: ' + ((b && fmtDataLocal(b.dataHora)) || '____/____/______'),
+      'Medida: ' + ((b && b.dataMedicao && fmtDataLocal(b.dataMedicao)) || '____/____/______')
+    ].join('     ');
+    doc.setFontSize(8.6);
+    doc.text(dados, W - M, 45, { align: 'right' });
+    return H_BARRA;
+  }
+
   // ── Ficha de visita pra imprimir (desenho a mão continua no papel) ───────
-  async function fichaVisita(b) {
+  // folhas: quantas folhas de rascunho quadriculado (serviço grande pede mais).
+  async function fichaVisita(b, folhas) {
     const doc = novoDoc();
     const o = (b && b.obsGerais) || {};
+    const totalFolhas = Math.min(6, Math.max(1, Number(folhas) || 1));
 
-    // Cabeçalho
-    doc.setFillColor(...INDIGO);
-    doc.rect(0, 0, W, 58, 'F');
-    doc.setFont('Poppins'); doc.setTextColor(255, 255, 255); doc.setFontSize(17);
-    doc.text('FICHA DE VISITA TÉCNICA', M, 30);
-    doc.setFontSize(8.5);
-    doc.text('Impresilk · Soluções Visuais', M, 44);
-    doc.setFontSize(9);
-    doc.text('Brief de Medição', W - M, 30, { align: 'right' });
+    cabecalhoFicha(doc, b, totalFolhas > 1 ? 'folha 1 de ' + totalFolhas : '');
 
-    let y = 78;
+    let y = 92;
     const linhaCampo = (rotulo, valor, x, largTotal, largRotulo) => {
       doc.setFont('Poppins'); doc.setFontSize(7.6); doc.setTextColor(...TINTA);
       doc.text(rotulo, x, y);
@@ -361,12 +390,7 @@ const PDF = (() => {
       return x + 10.5 + doc.getTextWidth(rotulo) + 12;
     };
 
-    // Linha 1: data, vendedor, O.S., número do brief
-    linhaCampo('DATA:', b ? fmtDataLocal(b.dataHora) : '', M, 100, 34);
-    linhaCampo('VENDEDOR:', b ? b.vendedor : '', M + 110, 175, 58);
-    linhaCampo('Nº O.S.:', b && String(b.osNumero || '').trim() ? b.osNumero : '', M + 295, 100, 44);
-    linhaCampo('Nº BRIEF:', b && b.numeroBrief ? String(b.numeroBrief).padStart(4, '0') : '', M + 405, LARG - 405, 50);
-    y += 17;
+    // Vendedor, O.S., brief e datas já saem na barra azul acima.
     linhaCampo('EMPRESA:', b ? b.cliente : '', M, 300, 52);
     linhaCampo('RESPONSÁVEL:', b ? b.responsavel : '', M + 310, 201, 74);
     y += 17;
@@ -388,8 +412,8 @@ const PDF = (() => {
     xc = M;
     xc = caixinha('Tirar medida serviço novo', xc, b && b.naturezaServico === 'Serviço novo');
     xc = caixinha('Restauração / troca / remoção', xc, b && (b.naturezaServico === 'Restauração ou troca' || b.naturezaServico === 'Remoção'));
-    xc = caixinha('Interno', xc, b && b.ambiente === 'Interno');
-    xc = caixinha('Externo', xc, b && b.ambiente === 'Externo');
+    xc = caixinha('Interno', xc, b && (b.ambientes || []).includes('Interno'));
+    xc = caixinha('Externo', xc, b && (b.ambientes || []).includes('Externo'));
 
     // Colunas de serviços (checklist do papel)
     y += 14;
@@ -448,30 +472,43 @@ const PDF = (() => {
     doc.rect(M, yGrid + 2, LARG, hGrid - 2);
 
     // Rodapé da ficha
-    y = yGridFim + 16;
-    xc = M;
-    doc.setFont('Poppins'); doc.setFontSize(7.4); doc.setTextColor(...TINTA);
-    doc.text('Arte em alta:', xc, y); xc += 52;
-    xc = caixinha('Sim', xc, b && o.arteAlta === 'Sim');
-    xc = caixinha('Não', xc, b && o.arteAlta === 'Não');
-    doc.text('Projeto 3D:', xc, y); xc += 47;
-    xc = caixinha('Sim', xc, b && o.projeto3D === 'Sim');
-    xc = caixinha('Não', xc, b && o.projeto3D === 'Não');
-    doc.text('Budget:', xc, y); xc += 34;
-    ['até 1 mil', '1 a 5 mil', '5 a 10 mil', '+10 mil'].forEach((fx, i) => {
-      const marcado = b && o.budget && ['Até R$1.000', 'R$1.000 a R$5.000', 'R$5.000 a R$10.000', 'Acima de R$10.000'][i] === o.budget;
-      xc = caixinha(fx, xc, marcado);
-    });
-    y += 16;
+    y = yGridFim + 18;
     linhaCampo('EQUIPE PRA INSTALAÇÃO:', b ? o.equipeInstalacao : '', M, 190, 106);
     linhaCampo('TEMPO ESTIMADO:', b ? o.tempoExecucao : '', M + 202, 172, 80);
     linhaCampo('PRAZO DO CLIENTE:', b ? o.prazo : '', M + 386, 125, 84);
+    y += 17;
+    linhaCampo('VISITA CONCLUÍDA POR:', b && b.visitaConcluida ? b.visitaConcluida.por : '', M, 300, 104);
+    linhaCampo('DATA / HORA:', b && b.visitaConcluida ? fmtDataHoraLocal(b.visitaConcluida.em) : '', M + 310, LARG - 310, 62);
 
     // Assinatura Impresilk
     const lw2 = 74;
     try { doc.addImage(PDF_LOGO, 'PNG', W - M - lw2, H - 34 - lw2 * LOGO_PROP, lw2, lw2 * LOGO_PROP); } catch {}
     doc.setFont('Poppins'); doc.setFontSize(6.8); doc.setTextColor(...CINZA);
     doc.text('Fotografe o desenho pronto e anexe no Brief de Medição (Desenhos da visita).', M, H - 26);
+
+    // Folhas extras: só cabeçalho e quadriculado inteiro, para serviço grande
+    for (let f = 2; f <= totalFolhas; f++) {
+      doc.addPage();
+      cabecalhoFicha(doc, b, 'folha ' + f + ' de ' + totalFolhas);
+      const yg = 100;
+      const hg = H - yg - 56;
+      doc.setFont('Spectral'); doc.setFontSize(7.6); doc.setTextColor(...CINZA);
+      doc.text('Continuação do rascunho — folha ' + f + '.', M, yg - 6);
+      doc.setDrawColor(221, 223, 251); doc.setLineWidth(0.5);
+      for (let gx = M; gx <= W - M + 0.1; gx += 14.2) doc.line(gx, yg, gx, yg + hg);
+      for (let gy = yg; gy <= yg + hg + 0.1; gy += 14.2) doc.line(M, gy, W - M, gy);
+      try {
+        doc.saveGraphicsState();
+        doc.setGState(new doc.GState({ opacity: 0.06 }));
+        const lw = 300;
+        doc.addImage(PDF_LOGO, 'PNG', W / 2 - lw / 2, yg + hg / 2 - (lw * LOGO_PROP) / 2, lw, lw * LOGO_PROP);
+        doc.restoreGraphicsState();
+      } catch {}
+      doc.setDrawColor(...INDIGO); doc.setLineWidth(1);
+      doc.rect(M, yg, LARG, hg);
+      doc.setFont('Poppins'); doc.setFontSize(6.8); doc.setTextColor(...CINZA);
+      doc.text('Impresilk · Brief de Medição' + (b && b.numeroBrief ? ' · Nº ' + String(b.numeroBrief).padStart(4, '0') : ''), M, H - 26);
+    }
 
     doc.save(b ? 'ficha-visita-' + (b.numeroBrief ? String(b.numeroBrief).padStart(4, '0') + '-' : '') + nomeArquivo(b.cliente || 'cliente') + '.pdf' : 'ficha-visita-em-branco.pdf');
   }

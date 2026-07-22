@@ -197,6 +197,34 @@ input:focus, select:focus, textarea:focus { outline: none; border-color: var(--i
 .card-item { border: 1.5px solid var(--borda); border-radius: var(--raio); padding: 14px; margin-bottom: 14px; background: var(--branco); box-shadow: var(--sombra); }
 .card-item .cabeca { display: flex; align-items: center; justify-content: space-between; gap: 8px; margin-bottom: 10px; }
 .card-item .cabeca h3 { font-size: 1.02rem; color: var(--indigo-escuro); }
+
+/* Card do item: recolhível e verde quando 100% pronto */
+.card-item.completo { border-color: #86EFAC; background: #F6FFF9; box-shadow: 0 0 0 1px #BBF7D0, var(--sombra); }
+.card-item.recolhido { padding-bottom: 12px; }
+.card-item.recolhido .cabeca { margin-bottom: 0; }
+.card-item.recolhido .corpo-item { display: none; }
+.alternar-item {
+  display: flex; align-items: center; gap: 8px; flex: 1; min-width: 0;
+  background: none; border: 0; padding: 6px 2px; cursor: pointer; text-align: left;
+  font-family: 'Poppins'; font-weight: 600; color: var(--indigo-escuro); font-size: 1.02rem;
+}
+.alternar-item .seta { color: var(--cinza); font-size: .9rem; flex: 0 0 auto; }
+.alternar-item .titulo-item { white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.card-item.completo .alternar-item { color: var(--ok); }
+.alternar-item .resumo-chip {
+  font-family: 'Poppins'; font-weight: 500; font-size: .72rem; color: var(--cinza);
+  background: var(--indigo-8); padding: 3px 9px; border-radius: 999px; white-space: nowrap; flex: 0 0 auto;
+}
+.card-item.completo .alternar-item .resumo-chip { background: var(--ok-bg); color: var(--ok); }
+
+/* Itens que vieram da O.S. */
+.linha-os-item {
+  display: flex; align-items: flex-start; gap: 10px; padding: 10px;
+  border: 1px solid var(--borda); border-radius: 10px; margin-bottom: 8px; cursor: pointer; background: var(--branco);
+}
+.linha-os-item input[type=checkbox] { width: 22px; height: 22px; margin-top: 2px; flex: 0 0 auto; accent-color: var(--indigo); }
+.linha-os-item span { display: block; min-width: 0; }
+.linha-os-item b { display: block; font-family: 'Poppins'; font-weight: 600; font-size: .9rem; }
 .par-medida { display: grid; grid-template-columns: 1fr auto 1fr auto; gap: 8px; align-items: center; margin-bottom: 8px; }
 .par-medida .x { font-family: 'Poppins'; font-weight: 700; color: var(--cinza); text-align: center; }
 .par-medida .acao-par { min-width: 40px; min-height: 40px; border: 0; background: none; color: var(--perigo); font-size: 1.1rem; cursor: pointer; }

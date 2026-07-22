@@ -168,13 +168,34 @@ async function buscarNoPCP(numero) {
         telefone: achou.whatsapp || '',
         endereco: achou.endereco || '',
         servico: achou.servico || '',
-        vendedor: achou.vendedor || ''
+        vendedor: achou.vendedor || '',
+        // Linhas do pedido: adiantam os itens do briefing (medidas em METROS)
+        itens: normalizarItens(achou.itens)
       };
     }
     if (data.nextAfter != null) after = data.nextAfter;
     else return null;
   }
   return null;
+}
+
+// Normaliza as linhas de item da O.S. para { descricao, medidas, qtde }.
+// Aceita os nomes de campo do PCP e os mais comuns do Mubisys cru.
+function normalizarItens(lista) {
+  if (!Array.isArray(lista)) return [];
+  return lista.map(it => {
+    if (!it || typeof it !== 'object') return null;
+    const descricao = String(pick(it, 'descricao', 'produto', 'nome', 'item_descricao', 'nome_produto') || '').trim();
+    let medidas = String(pick(it, 'medidas', 'medida', 'dimensoes') || '').trim();
+    if (!medidas) {
+      const larg = pick(it, 'largura', 'larg');
+      const alt = pick(it, 'altura', 'alt');
+      if (larg && alt) medidas = String(larg) + 'x' + String(alt);
+    }
+    const qtde = String(pick(it, 'qtde', 'quantidade', 'qtd', 'quant') || '1').trim();
+    if (!descricao && !medidas) return null;
+    return { descricao, medidas, qtde };
+  }).filter(Boolean).slice(0, 60); // teto de segurança pra O.S. gigante
 }
 
 // ── Helpers de extração (mesmos do conector do PCP) ─────────────────────────
@@ -227,7 +248,8 @@ function mapearMubisys(o) {
     telefone: pick(contato, 'celular', 'telefone', 'whatsapp', 'fone'),
     endereco: montarEndereco(endereco),
     servico:  pick(o, 'nome_trabalho', 'referencia', 'titulo', 'descricao'),
-    vendedor: pick(o, 'vendedor', 'atendente', 'vendedorNome')
+    vendedor: pick(o, 'vendedor', 'atendente', 'vendedorNome'),
+    itens:    normalizarItens(o.itens || o.produtos || o.ordem_servico_itens || o.itens_ordem)
   };
 }
 
