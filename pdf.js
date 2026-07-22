@@ -62,6 +62,12 @@ const PDF = (() => {
   function numBrief(b) {
     return b && b.numeroBrief ? 'Nº ' + String(b.numeroBrief).padStart(4, '0') : '';
   }
+  // Ambiente virou lista; briefing antigo tinha string (ver ambientesDe em app.js)
+  function ambientesDoBrief(b) {
+    if (!b) return [];
+    if (Array.isArray(b.ambientes)) return b.ambientes;
+    return b.ambiente ? [b.ambiente] : [];
+  }
 
   // ── Cursor de página com quebra automática ────────────────────────────────
   function criarCursor(doc) {
@@ -76,7 +82,7 @@ const PDF = (() => {
     doc.rect(0, 0, W, 92, 'F');
     doc.setFillColor(...INDIGO_ESCURO);
     doc.rect(0, 86, W, 6, 'F');
-    doc.setFont('Poppins'); doc.setTextColor(255, 255, 255);
+    doc.setFont('Poppins', 'normal'); doc.setTextColor(255, 255, 255);
     doc.setFontSize(21);
     doc.text(titulo, M, 42);
     doc.setFontSize(9.5);
@@ -93,7 +99,7 @@ const PDF = (() => {
     c.garantir(40);
     doc.setFillColor(...INDIGO_CLARO);
     doc.roundedRect(M, c.y - 13, LARG, 24, 5, 5, 'F');
-    doc.setFont('Poppins'); doc.setFontSize(10.5); doc.setTextColor(...INDIGO_ESCURO);
+    doc.setFont('Poppins', 'normal'); doc.setFontSize(10.5); doc.setTextColor(...INDIGO_ESCURO);
     doc.text(texto.toUpperCase(), M + 10, c.y + 3);
     c.y += 26;
   }
@@ -102,7 +108,7 @@ const PDF = (() => {
     if (!valor) return 0;
     const x = xBase != null ? xBase : M;
     const larg = larguraCol != null ? larguraCol : LARG;
-    doc.setFont('Poppins'); doc.setFontSize(7.4); doc.setTextColor(...CINZA);
+    doc.setFont('Poppins', 'normal'); doc.setFontSize(7.4); doc.setTextColor(...CINZA);
     doc.text(rotulo.toUpperCase(), x, c.y);
     doc.setFont('Spectral', 'bold'); doc.setFontSize(10.5); doc.setTextColor(...TINTA);
     const linhas = doc.splitTextToSize(String(valor), larg);
@@ -146,7 +152,7 @@ const PDF = (() => {
         desenharFotoFaltando(doc, x, c.y, largFoto, hFoto, f.arquivada);
       }
       if (f.legenda) {
-        doc.setFont('Poppins'); doc.setFontSize(7); doc.setTextColor(...CINZA);
+        doc.setFont('Poppins', 'normal'); doc.setFontSize(7); doc.setTextColor(...CINZA);
         doc.text(String(f.legenda), x, c.y + hFoto + 10);
       }
       linhaAltura = Math.max(linhaAltura, blocoH);
@@ -159,7 +165,7 @@ const PDF = (() => {
   function desenharFotoFaltando(doc, x, y, w, h, arquivada) {
     doc.setDrawColor(...BORDA); doc.setFillColor(250, 250, 254);
     doc.roundedRect(x, y, w, h, 6, 6, 'FD');
-    doc.setFont('Poppins'); doc.setFontSize(7.5); doc.setTextColor(...CINZA);
+    doc.setFont('Poppins', 'normal'); doc.setFontSize(7.5); doc.setTextColor(...CINZA);
     doc.text(arquivada ? 'Foto removida na limpeza' : 'Foto ainda não sincronizada', x + w / 2, y + h / 2, { align: 'center' });
   }
 
@@ -171,12 +177,15 @@ const PDF = (() => {
       doc.setDrawColor(...INDIGO);
       doc.setLineWidth(1.2);
       doc.line(M, H - 46, W - M, H - 46);
-      doc.setFont('Poppins'); doc.setFontSize(7.5); doc.setTextColor(...CINZA);
-      doc.text(rotulo, M, H - 32);
+      doc.setFont('Poppins', 'normal'); doc.setFontSize(7.5); doc.setTextColor(...CINZA);
+      // O rótulo pode ser longo (cliente + O.S.): corta pra não bater no número da página
+      const larguraNum = doc.getTextWidth('página ' + p + ' de ' + total) + 14;
+      doc.text(doc.splitTextToSize(String(rotulo), LARG - larguraNum)[0] || '', M, H - 32);
       doc.text('página ' + p + ' de ' + total, W - M, H - 32, { align: 'right' });
       if (p === total) {
-        const lw = 92;
-        try { doc.addImage(PDF_LOGO, 'PNG', W - M - lw, H - 40 - lw * LOGO_PROP + 6, lw, lw * LOGO_PROP); } catch {}
+        // Logo ACIMA da linha: antes ele descia sobre o "página X de Y"
+        const lw = 78;
+        try { doc.addImage(PDF_LOGO, 'PNG', W - M - lw, H - 54 - lw * LOGO_PROP, lw, lw * LOGO_PROP); } catch {}
       }
     }
   }
@@ -187,10 +196,10 @@ const PDF = (() => {
       ['Telefone', b.telefone], ['Responsável', b.responsavel],
       ['O.S.', String(b.osNumero || '').trim() || 'SEM O.S. por enquanto'], ['Serviço da O.S.', b.osServico],
       ['Tipo de medição', b.tipoMedicao], ['Natureza', b.naturezaServico],
-      ['Ambiente', (b.ambientes || []).join(' e ')], ['Status', b.situacao === 'enviado' ? b.status : 'Rascunho'],
+      ['Ambiente', ambientesDoBrief(b).join(' e ')], ['Status', b.situacao === 'enviado' ? b.status : 'Rascunho'],
       ['Vendedor', b.vendedor], ['Quem mediu', b.quemMediu],
       ['Data da visita', fmtDataHoraLocal(b.dataHora)],
-      ['Data da medida', b.dataMedicao ? fmtDataLocal(b.dataMedicao) : ''],
+      ['Data da medida', fmtDataLocal(b.dataMedicao || b.dataHora)],
       ['Visita concluída por', b.visitaConcluida ? b.visitaConcluida.por : ''],
       ['Visita concluída em', b.visitaConcluida ? fmtDataHoraLocal(b.visitaConcluida.em) : ''],
       ['Enviado em', b.enviadoEm ? fmtDataHoraLocal(b.enviadoEm) : '']
@@ -202,12 +211,12 @@ const PDF = (() => {
     if (!linhas.length) return;
     c.garantir(26 + linhas.length * 17);
     const cols = [M, M + 150, M + 260, M + 370];
-    doc.setFont('Poppins'); doc.setFontSize(7.6); doc.setTextColor(...CINZA);
+    doc.setFont('Poppins', 'normal'); doc.setFontSize(7.6); doc.setTextColor(...CINZA);
     doc.text('MEDIDA', cols[0], c.y); doc.text('LARGURA', cols[1], c.y);
     doc.text('ALTURA', cols[2], c.y); doc.text('ÁREA', cols[3], c.y);
     doc.setDrawColor(...BORDA); doc.line(M, c.y + 4, W - M, c.y + 4);
     c.y += 16;
-    doc.setFont('Spectral'); doc.setFontSize(10); doc.setTextColor(...TINTA);
+    doc.setFont('Spectral', 'normal'); doc.setFontSize(10); doc.setTextColor(...TINTA);
     linhas.forEach((p, i) => {
       doc.text(linhas.length > 1 ? 'Ponto ' + (i + 1) : 'Principal', cols[0], c.y);
       doc.text(String(p.largura || '?') + ' cm', cols[1], c.y);
@@ -288,7 +297,7 @@ const PDF = (() => {
     gradeDados(doc, c, obsGeraisPares(b));
 
     c.garantir(30);
-    doc.setFont('Spectral'); doc.setFontSize(8.5); doc.setTextColor(...CINZA);
+    doc.setFont('Spectral', 'normal'); doc.setFontSize(8.5); doc.setTextColor(...CINZA);
     doc.text('Gerado em ' + fmtDataHoraLocal(new Date().toISOString()) + ' por ' + ((STORE.getUser() || {}).nome || ''), M, c.y + 8);
 
     fecharDocumento(doc, 'Brief de Medição ' + (numBrief(b) || '') + ' · ' + (b.cliente || '') + (String(b.osNumero || '').trim() ? ' · O.S. ' + b.osNumero : ''));
@@ -313,7 +322,7 @@ const PDF = (() => {
       c.garantir(24);
       doc.setFillColor(254, 226, 226); doc.setDrawColor(252, 165, 165);
       doc.roundedRect(M, c.y - 10, LARG, 22, 5, 5, 'FD');
-      doc.setFont('Poppins'); doc.setFontSize(9); doc.setTextColor(153, 27, 27);
+      doc.setFont('Poppins', 'normal'); doc.setFontSize(9); doc.setTextColor(153, 27, 27);
       doc.text('MEDIDAS APROVADAS PRA EXECUÇÃO. CONFERIR ANTES DE PRODUZIR.', M + 10, c.y + 4);
       c.y += 24;
     }
@@ -327,32 +336,36 @@ const PDF = (() => {
   // Cabeçalho azul da ficha: leva vendedor, Nº O.S., Nº brief e data, para que
   // a folha impressa já se identifique sozinha na prancheta.
   function cabecalhoFicha(doc, b, rotuloExtra) {
-    const H_BARRA = 74;
+    const H_BARRA = 82;
     doc.setFillColor(...INDIGO);
     doc.rect(0, 0, W, H_BARRA, 'F');
     doc.setFillColor(...INDIGO_ESCURO);
     doc.rect(0, H_BARRA - 5, W, 5, 'F');
 
-    doc.setFont('Poppins'); doc.setTextColor(255, 255, 255);
+    doc.setFont('Poppins', 'normal'); doc.setTextColor(255, 255, 255);
     doc.setFontSize(16);
-    doc.text('FICHA DE VISITA TÉCNICA', M, 27);
+    doc.text('FICHA DE VISITA TÉCNICA', M, 26);
     doc.setFontSize(8);
-    doc.text('Impresilk · Soluções Visuais' + (rotuloExtra ? '  ·  ' + rotuloExtra : ''), M, 40);
+    doc.text('Impresilk · Soluções Visuais' + (rotuloExtra ? '  ·  ' + rotuloExtra : ''), M, 39);
 
     // Nº do brief em destaque à direita
     const nb = b && b.numeroBrief ? 'Nº ' + String(b.numeroBrief).padStart(4, '0') : 'Nº ____';
     doc.setFontSize(15);
-    doc.text(nb, W - M, 27, { align: 'right' });
+    doc.text(nb, W - M, 26, { align: 'right' });
 
-    // Faixa de dados dentro da barra azul
+    // Faixa de dados numa linha PRÓPRIA (antes ela dividia a baseline com o
+    // subtítulo e, na ficha em branco, ainda sangrava pela borda esquerda).
+    const vendedor = String((b && b.vendedor) || '').slice(0, 22) || '____________';
     const dados = [
-      'Vendedor: ' + ((b && b.vendedor) || '____________________'),
+      'Vendedor: ' + vendedor,
       'O.S.: ' + ((b && String(b.osNumero || '').trim()) || '________'),
-      'Data: ' + ((b && fmtDataLocal(b.dataHora)) || '____/____/______'),
-      'Medida: ' + ((b && b.dataMedicao && fmtDataLocal(b.dataMedicao)) || '____/____/______')
-    ].join('     ');
-    doc.setFontSize(8.6);
-    doc.text(dados, W - M, 45, { align: 'right' });
+      'Data: ' + ((b && fmtDataLocal(b.dataHora)) || '__/__/____'),
+      'Medida: ' + ((b && fmtDataLocal(b.dataMedicao || b.dataHora)) || '__/__/____')
+    ].join('    ');
+    let fs = 8.6;
+    doc.setFontSize(fs);
+    while (doc.getTextWidth(dados) > LARG && fs > 6) { fs -= 0.3; doc.setFontSize(fs); }
+    doc.text(dados, W - M, 60, { align: 'right' });
     return H_BARRA;
   }
 
@@ -365,9 +378,9 @@ const PDF = (() => {
 
     cabecalhoFicha(doc, b, totalFolhas > 1 ? 'folha 1 de ' + totalFolhas : '');
 
-    let y = 92;
+    let y = 100;  // barra azul agora tem 82pt
     const linhaCampo = (rotulo, valor, x, largTotal, largRotulo) => {
-      doc.setFont('Poppins'); doc.setFontSize(7.6); doc.setTextColor(...TINTA);
+      doc.setFont('Poppins', 'normal'); doc.setFontSize(7.6); doc.setTextColor(...TINTA);
       doc.text(rotulo, x, y);
       const xi = x + (largRotulo || doc.getTextWidth(rotulo) + 4);
       const xf = x + largTotal;
@@ -382,10 +395,10 @@ const PDF = (() => {
       doc.setDrawColor(...TINTA); doc.setLineWidth(0.8);
       doc.rect(x, y - 6.5, 7.5, 7.5);
       if (marcado) {
-        doc.setFont('Poppins'); doc.setFontSize(8); doc.setTextColor(...INDIGO);
+        doc.setFont('Poppins', 'normal'); doc.setFontSize(8); doc.setTextColor(...INDIGO);
         doc.text('X', x + 1.6, y - 0.4);
       }
-      doc.setFont('Poppins'); doc.setFontSize(7.4); doc.setTextColor(...TINTA);
+      doc.setFont('Poppins', 'normal'); doc.setFontSize(7.4); doc.setTextColor(...TINTA);
       doc.text(rotulo, x + 10.5, y);
       return x + 10.5 + doc.getTextWidth(rotulo) + 12;
     };
@@ -406,14 +419,14 @@ const PDF = (() => {
     y += 18;
     doc.setFillColor(...INDIGO_CLARO);
     doc.rect(M, y - 9, LARG, 15, 'F');
-    doc.setFont('Poppins'); doc.setFontSize(8.5); doc.setTextColor(...INDIGO_ESCURO);
+    doc.setFont('Poppins', 'normal'); doc.setFontSize(8.5); doc.setTextColor(...INDIGO_ESCURO);
     doc.text('TIPO DE SERVIÇO', M + 6, y + 1.5);
     y += 17;
     xc = M;
     xc = caixinha('Tirar medida serviço novo', xc, b && b.naturezaServico === 'Serviço novo');
     xc = caixinha('Restauração / troca / remoção', xc, b && (b.naturezaServico === 'Restauração ou troca' || b.naturezaServico === 'Remoção'));
-    xc = caixinha('Interno', xc, b && (b.ambientes || []).includes('Interno'));
-    xc = caixinha('Externo', xc, b && (b.ambientes || []).includes('Externo'));
+    xc = caixinha('Interno', xc, ambientesDoBrief(b).includes('Interno'));
+    xc = caixinha('Externo', xc, ambientesDoBrief(b).includes('Externo'));
 
     // Colunas de serviços (checklist do papel)
     y += 14;
@@ -429,7 +442,7 @@ const PDF = (() => {
       col.itens.forEach(item => {
         const ehTituloGrupo = item === item.toUpperCase();
         if (ehTituloGrupo) {
-          doc.setFont('Poppins'); doc.setFontSize(7.6); doc.setTextColor(...INDIGO_ESCURO);
+          doc.setFont('Poppins', 'normal'); doc.setFontSize(7.6); doc.setTextColor(...INDIGO_ESCURO);
           doc.text(item, col.x, y);
         } else {
           caixinha(item, col.x, false);
@@ -441,7 +454,7 @@ const PDF = (() => {
     y = yMax + 2;
 
     // Serviços extras em linha
-    doc.setFont('Poppins'); doc.setFontSize(7.6); doc.setTextColor(...INDIGO_ESCURO);
+    doc.setFont('Poppins', 'normal'); doc.setFontSize(7.6); doc.setTextColor(...INDIGO_ESCURO);
     doc.text('EXTRAS:', M, y);
     xc = M + 36;
     ['Remoção adesivo', 'Remoção fachada', 'Pintura', 'Lixamento', 'Solda', 'Elétrica', 'Terceirizados'].forEach(sv => { xc = caixinha(sv, xc, false); });
@@ -454,7 +467,7 @@ const PDF = (() => {
     const yGrid = y;
     const hGrid = 700 - yGrid > 320 ? 700 - yGrid : 320;
     const yGridFim = yGrid + hGrid;
-    doc.setFont('Spectral'); doc.setFontSize(7.6); doc.setTextColor(...CINZA);
+    doc.setFont('Spectral', 'normal'); doc.setFontSize(7.6); doc.setTextColor(...CINZA);
     doc.text('Rascunhe aqui as medidas (largura × altura × profundidade), componentes extras e imprevistos. Se precisar, use o verso.', M, y - 2);
     // grade
     doc.setDrawColor(221, 223, 251); doc.setLineWidth(0.5);
@@ -483,16 +496,16 @@ const PDF = (() => {
     // Assinatura Impresilk
     const lw2 = 74;
     try { doc.addImage(PDF_LOGO, 'PNG', W - M - lw2, H - 34 - lw2 * LOGO_PROP, lw2, lw2 * LOGO_PROP); } catch {}
-    doc.setFont('Poppins'); doc.setFontSize(6.8); doc.setTextColor(...CINZA);
+    doc.setFont('Poppins', 'normal'); doc.setFontSize(6.8); doc.setTextColor(...CINZA);
     doc.text('Fotografe o desenho pronto e anexe no Brief de Medição (Desenhos da visita).', M, H - 26);
 
     // Folhas extras: só cabeçalho e quadriculado inteiro, para serviço grande
     for (let f = 2; f <= totalFolhas; f++) {
       doc.addPage();
       cabecalhoFicha(doc, b, 'folha ' + f + ' de ' + totalFolhas);
-      const yg = 100;
+      const yg = 108;
       const hg = H - yg - 56;
-      doc.setFont('Spectral'); doc.setFontSize(7.6); doc.setTextColor(...CINZA);
+      doc.setFont('Spectral', 'normal'); doc.setFontSize(7.6); doc.setTextColor(...CINZA);
       doc.text('Continuação do rascunho — folha ' + f + '.', M, yg - 6);
       doc.setDrawColor(221, 223, 251); doc.setLineWidth(0.5);
       for (let gx = M; gx <= W - M + 0.1; gx += 14.2) doc.line(gx, yg, gx, yg + hg);
@@ -506,7 +519,7 @@ const PDF = (() => {
       } catch {}
       doc.setDrawColor(...INDIGO); doc.setLineWidth(1);
       doc.rect(M, yg, LARG, hg);
-      doc.setFont('Poppins'); doc.setFontSize(6.8); doc.setTextColor(...CINZA);
+      doc.setFont('Poppins', 'normal'); doc.setFontSize(6.8); doc.setTextColor(...CINZA);
       doc.text('Impresilk · Brief de Medição' + (b && b.numeroBrief ? ' · Nº ' + String(b.numeroBrief).padStart(4, '0') : ''), M, H - 26);
     }
 

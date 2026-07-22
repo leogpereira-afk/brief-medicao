@@ -143,6 +143,14 @@ function rotuloBrief(b) {
   return b && b.numeroBrief ? 'Nº ' + padBrief(b.numeroBrief) : 'Nº sai na 1ª sincronização';
 }
 
+// Ambiente virou lista (aceita Interno E Externo). Briefing gravado no formato
+// antigo tinha uma string; sem esta conversão o dado sumiria da tela em silêncio.
+function ambientesDe(b) {
+  if (!b) return [];
+  if (Array.isArray(b.ambientes)) return b.ambientes;
+  return b.ambiente ? [b.ambiente] : [];
+}
+
 function nomeItem(item) {
   if (!item) return '';
   if (item.tipo === 'Outro') return item.tipoOutro || 'Outro';
@@ -280,6 +288,9 @@ let ETAPA = 1;            // etapa ativa no wizard (mobile)
 // Cards de item recolhidos. Fica só na memória da tela (não vai pro servidor):
 // é preferência de visualização do momento, não dado do briefing.
 const ITENS_RECOLHIDOS = new Set();
+// Itens da O.S. que o vendedor desmarcou na lista (senão voltavam marcados
+// a cada redesenho da tela).
+const OS_ITENS_DESMARCADOS = new Set();
 let FILTROS = { texto: '', os: '', de: '', ate: '', deBr: '', ateBr: '', status: '', vendedor: '', tipo: '', semOS: false };
 let SYNC_ESTADO = { status: 'ok', pendentes: 0 };
 
@@ -422,6 +433,7 @@ function sairDaConta() {
 
 function renderApp() {
   const app = $('#app');
+  flushSalvar(); // nunca redesenhar por cima de digitação ainda não gravada
   if (!SESSAO && ROTA.nome !== 'login') { location.hash = '#/login'; return; }
   switch (ROTA.nome) {
     case 'login': return renderLogin(app);
@@ -543,18 +555,30 @@ function criarNovo() {
 }
 
 let _timerSalvar = null;
+let _salvarPendente = false;
 function salvarRascunho(imediato) {
   if (!BRIEF) return;
   BRIEF.atualizadoEm = new Date().toISOString();
   BRIEF.atualizadoPor = SESSAO.nome;
   clearTimeout(_timerSalvar);
   const gravar = () => {
+    _salvarPendente = false;
     STORE.saveOS(JSON.parse(JSON.stringify(BRIEF)));
     const s = $('#salvo-info');
     if (s) s.textContent = 'Salvo automaticamente';
   };
   if (imediato) gravar();
-  else _timerSalvar = setTimeout(gravar, 600);
+  else { _salvarPendente = true; _timerSalvar = setTimeout(gravar, 600); }
+}
+
+// Grava AGORA o que estiver esperando o tempinho do autosave. Chamado antes de
+// qualquer redesenho da tela: o redesenho refaz os campos a partir do BRIEF, e
+// sem isso o que o vendedor digitou nos últimos instantes sumiria da tela.
+function flushSalvar() {
+  if (!_salvarPendente || !BRIEF) return;
+  clearTimeout(_timerSalvar);
+  _salvarPendente = false;
+  STORE.saveOS(JSON.parse(JSON.stringify(BRIEF)));
 }
 
 function pendencias(b) {
@@ -617,9 +641,9 @@ function renderLista(app) {
     '<main class="miolo">' +
     '<div class="card"><div class="filtros">' +
     '<div class="campo" style="margin:0"><label>Buscar cliente</label><input id="f-texto" type="search" placeholder="Parte do nome já encontra" value="' + esc(FILTROS.texto) + '"></div>' +
-    '<div class="campo" style="margin:0"><label>Número da O.S.</label><input id="f-os" inputmode="numeric" value="' + esc(FILTROS.os) + '"></div>' +
-    '<div class="campo" style="margin:0"><label>De</label><input id="f-de" inputmode="numeric" maxlength="10" placeholder="dd/mm/aaaa" value="' + esc(FILTROS.deBr || '') + '"></div>' +
-    '<div class="campo" style="margin:0"><label>Até</label><input id="f-ate" inputmode="numeric" maxlength="10" placeholder="dd/mm/aaaa" value="' + esc(FILTROS.ateBr || '') + '"></div>' +
+    '<div class="campo" style="margin:0"><label>Número da O.S.</label><input id="f-os" type="text" inputmode="numeric" value="' + esc(FILTROS.os) + '"></div>' +
+    '<div class="campo" style="margin:0"><label>De</label><input id="f-de" type="text" inputmode="numeric" maxlength="10" placeholder="dd/mm/aaaa" value="' + esc(FILTROS.deBr || '') + '"></div>' +
+    '<div class="campo" style="margin:0"><label>Até</label><input id="f-ate" type="text" inputmode="numeric" maxlength="10" placeholder="dd/mm/aaaa" value="' + esc(FILTROS.ateBr || '') + '"></div>' +
     '<div class="linha-filtros">' +
     '<div class="campo" style="margin:0"><label>Status</label><select id="f-status"><option value="">Todos</option>' +
     STATUS_LISTA.map(s => '<option ' + (FILTROS.status === s ? 'selected' : '') + '>' + esc(s) + '</option>').join('') + '</select></div>' +
@@ -719,6 +743,8 @@ function renderEditor(app) {
   const b = STORE.getOS(ROTA.id);
   if (!b) { toast('Briefing não encontrado neste aparelho', 'erro'); location.hash = '#/'; return; }
   if (b.situacao === 'enviado' && SESSAO.papel !== 'admin') { location.hash = '#/b/' + b.id; return; }
+  // Troca de briefing: estado de tela do anterior não vale mais
+  if (!BRIEF || BRIEF.id !== b.id) { ITENS_RECOLHIDOS.clear(); OS_ITENS_DESMARCADOS.clear(); }
   BRIEF = b;
   if (!BRIEF.obsGerais) BRIEF.obsGerais = novoBriefing().obsGerais;
   if (!BRIEF.croquis) BRIEF.croquis = [];
@@ -780,7 +806,7 @@ function htmlEtapa2(cfg) {
     '<div class="sub-secao">Etapa 2 · O.S. e cliente</div>' +
 
     '<div class="campo"><label>Número da O.S. (opcional)</label>' +
-    '<div style="display:flex; gap:8px"><input id="c-osnumero" inputmode="numeric" placeholder="Ex: 22416" value="' + esc(BRIEF.osNumero) + '" style="flex:1">' +
+    '<div style="display:flex; gap:8px"><input id="c-osnumero" type="text" inputmode="numeric" placeholder="Ex: 22416" value="' + esc(BRIEF.osNumero) + '" style="flex:1">' +
     '<button class="botao suave" id="btn-buscar-os" style="min-width:110px">Buscar</button></div>' +
     '<div id="os-resultado">' +
     (BRIEF.osOrigem && BRIEF.osNumero ? '<div class="aviso verde">O.S. ' + esc(BRIEF.osNumero) + ' vinculada' + (BRIEF.osServico ? ': ' + esc(BRIEF.osServico) : '') + '</div>' : '') +
@@ -796,11 +822,13 @@ function htmlEtapa2(cfg) {
     '</div>' +
     '<div class="linha-3">' +
     '<div class="campo"><label>Data da visita</label>' +
-    '<input id="c-data" inputmode="numeric" placeholder="dd/mm/aaaa" maxlength="10" value="' + esc(isoParaDataBr(BRIEF.dataHora)) + '"></div>' +
+    '<input id="c-data" type="text" inputmode="numeric" placeholder="dd/mm/aaaa" maxlength="10" value="' + esc(isoParaDataBr(BRIEF.dataHora)) + '">' +
+    '<div class="dica-campo erro-campo" id="aviso-data"></div></div>' +
     '<div class="campo"><label>Hora</label>' +
-    '<input id="c-hora" inputmode="numeric" placeholder="hh:mm" maxlength="5" value="' + esc(isoParaHoraBr(BRIEF.dataHora)) + '"></div>' +
+    '<input id="c-hora" type="text" inputmode="numeric" placeholder="hh:mm" maxlength="5" value="' + esc(isoParaHoraBr(BRIEF.dataHora)) + '"></div>' +
     '<div class="campo"><label>Data da medida</label>' +
-    '<input id="c-datamedicao" inputmode="numeric" placeholder="dd/mm/aaaa" maxlength="10" value="' + esc(isoParaDataBr(BRIEF.dataMedicao || BRIEF.dataHora)) + '"></div>' +
+    '<input id="c-datamedicao" type="text" inputmode="numeric" placeholder="dd/mm/aaaa" maxlength="10" value="' + esc(isoParaDataBr(BRIEF.dataMedicao || BRIEF.dataHora)) + '">' +
+    '<div class="dica-campo erro-campo" id="aviso-medida"></div></div>' +
     '</div>' +
 
     '<div class="campo"><label>Tipo de medição <span class="obrig">*</span></label>' +
@@ -815,7 +843,7 @@ function htmlEtapa2(cfg) {
     ['Serviço novo', 'Restauração ou troca', 'Remoção'].map(o => '<option ' + (BRIEF.naturezaServico === o ? 'selected' : '') + '>' + o + '</option>').join('') + '</select></div>' +
 
     '<div class="campo"><label>Ambiente (pode marcar os dois)</label><div class="chips">' +
-    AMBIENTES.map(a => '<button class="chip ' + ((BRIEF.ambientes || []).includes(a) ? 'marcado' : '') + '" data-ambiente="' + esc(a) + '">' + esc(a) + '</button>').join('') +
+    AMBIENTES.map(a => '<button class="chip ' + (ambientesDe(BRIEF).includes(a) ? 'marcado' : '') + '" data-ambiente="' + esc(a) + '">' + esc(a) + '</button>').join('') +
     '</div></div>' +
 
     '<div class="campo"><label>Quem mediu</label><input id="c-quemmediu" type="text" value="' + esc(BRIEF.quemMediu) + '">' +
@@ -843,18 +871,10 @@ function htmlEtapa3() {
 }
 
 function htmlEtapa4(cfg) {
+  // Faltando os dados do cliente, avisamos e travamos só o que ADICIONA item —
+  // esconder a etapa inteira faria o vendedor achar que perdeu o que já mediu.
   const falta = faltaCliente(BRIEF);
-  if (falta.length) {
-    return (
-      '<section class="etapa" data-etapa="4">' +
-      '<div class="card">' +
-      '<div class="sub-secao">Etapa 4 · Itens medidos</div>' +
-      '<div class="aviso amarelo">🔒 Preencha primeiro, na etapa 2: <b>' + esc(falta.join(', ')) + '</b>.<br>' +
-      'Assim a medida nunca fica sem dono.</div>' +
-      '<button class="botao largo suave" id="btn-ir-etapa2">Ir para a etapa 2</button>' +
-      '</div></section>'
-    );
-  }
+  const travado = falta.length > 0;
   const prontos = BRIEF.itens.filter(itemCompleto).length;
   const concl = BRIEF.visitaConcluida;
   return (
@@ -866,11 +886,17 @@ function htmlEtapa4(cfg) {
     (BRIEF.itens.length > 1 ? '<button class="botao mini fantasma" id="btn-recolher-todos">Recolher todos</button>' : '') +
     '<button class="botao mini fantasma" id="btn-manual-4">❓ Manual</button></div></div>' +
 
+    (travado
+      ? '<div class="card"><div class="aviso amarelo" style="margin-top:0">🔒 Para adicionar itens, preencha antes na etapa 2: <b>' +
+        esc(falta.join(', ')) + '</b>. Assim a medida nunca fica sem dono.</div>' +
+        '<button class="botao largo suave" id="btn-ir-etapa2">Ir para a etapa 2</button></div>'
+      : '') +
+
     // Itens que vieram na O.S.: adianta o serviço, o vendedor só confere
-    '<div id="painel-os-itens">' + htmlItensDaOS() + '</div>' +
+    '<div id="painel-os-itens">' + (travado ? '' : htmlItensDaOS()) + '</div>' +
 
     '<div id="lista-itens">' + BRIEF.itens.map((it, i) => htmlItem(it, i, cfg)).join('') + '</div>' +
-    '<button class="botao largo suave" id="btn-add-item" style="margin-bottom:14px">➕ Adicionar item</button>' +
+    '<button class="botao largo suave" id="btn-add-item" style="margin-bottom:14px"' + (travado ? ' disabled' : '') + '>➕ Adicionar item</button>' +
 
     // Fecho da visita: carimba quem concluiu e a data/hora automaticamente
     '<div class="card">' +
@@ -879,7 +905,9 @@ function htmlEtapa4(cfg) {
         '<button class="botao mini fantasma" id="btn-reabrir-visita">Reabrir visita</button>'
       : '<div class="sub-secao">Fim da visita</div>' +
         '<p class="dica-campo" style="margin-bottom:10px">Terminou de medir e fotografar? Conclua a visita: o app grava quem concluiu e carimba a data e a hora sozinho. O envio pro design libera depois disso.</p>' +
-        '<button class="botao largo" id="btn-concluir-visita">✅ Visita concluída</button>') +
+        (BRIEF.itens.length
+          ? '<button class="botao largo" id="btn-concluir-visita">✅ Visita concluída</button>'
+          : '<div class="aviso amarelo" style="margin:0">Adicione pelo menos um item medido antes de concluir a visita.</div>')) +
     '</div>' +
 
     '<div class="card"><div class="sub-secao">Desenhos da visita (croquis)</div>' +
@@ -937,14 +965,14 @@ function htmlItem(item, idx, cfg) {
     '</div>' +
     (item.tipo === 'Outro' ? '<div class="campo"><label>Detalhe do serviço/material</label><input type="text" data-icampo="detalheServico" value="' + esc(item.detalheServico) + '"></div>' : '') +
     '<div class="campo"><label>Quantidade</label>' +
-    '<input inputmode="numeric" data-icampo="quantidade" style="max-width:140px" value="' + esc(item.quantidade || '1') + '"></div>' +
+    '<input type="text" inputmode="numeric" data-icampo="quantidade" style="max-width:140px" value="' + esc(item.quantidade || '1') + '"></div>' +
 
     '<div class="campo"><label>Medidas (cm) <span class="obrig">*</span> <button class="botao mini fantasma" data-manual="medir" style="min-height:32px; padding:4px 10px; margin-left:6px">?</button></label>' +
     (item.medidas || []).map((p, pi) =>
       '<div class="par-medida">' +
-      '<input inputmode="decimal" placeholder="Largura" data-medida="largura" data-par="' + pi + '" value="' + esc(p.largura) + '">' +
+      '<input type="text" inputmode="decimal" placeholder="Largura" data-medida="largura" data-par="' + pi + '" value="' + esc(p.largura) + '">' +
       '<span class="x">×</span>' +
-      '<input inputmode="decimal" placeholder="Altura" data-medida="altura" data-par="' + pi + '" value="' + esc(p.altura) + '">' +
+      '<input type="text" inputmode="decimal" placeholder="Altura" data-medida="altura" data-par="' + pi + '" value="' + esc(p.altura) + '">' +
       ((item.medidas.length > 1) ? '<button class="acao-par" data-remover-par="' + pi + '" title="Remover este ponto">✕</button>' : '<span></span>') +
       '</div>'
     ).join('') +
@@ -952,7 +980,7 @@ function htmlItem(item, idx, cfg) {
     '<button class="botao mini suave" data-add-par>➕ Adicionar ponto de medição (superfície irregular)</button></div>' +
 
     '<div class="campo"><label>Altura de instalação (cm, do chão até a base da peça)</label>' +
-    '<input inputmode="decimal" data-icampo="alturaInstalacao" value="' + esc(item.alturaInstalacao) + '"></div>' +
+    '<input type="text" inputmode="decimal" data-icampo="alturaInstalacao" value="' + esc(item.alturaInstalacao) + '"></div>' +
 
     '<div class="campo"><label>Superfície (marque todas que valem)</label>' +
     '<div class="chips">' +
@@ -1000,9 +1028,10 @@ function htmlItensDaOS() {
     '<p class="dica-campo" style="margin-bottom:10px">Vieram do sistema. Marque os que você vai medir e traga pro briefing — já entram com medida e quantidade preenchidas, é só conferir no local.</p>' +
     pendentes.map(({ it, i }) =>
       '<label class="linha-os-item">' +
-      '<input type="checkbox" data-osidx="' + i + '" checked>' +
+      '<input type="checkbox" data-osidx="' + i + '"' + (OS_ITENS_DESMARCADOS.has(i) ? '' : ' checked') + '>' +
       '<span><b>' + esc(String(it.descricao || 'Item').slice(0, 70)) + '</b>' +
-      '<span class="dica-campo">' + esc(it.medidas || 'sem medida') + ' m · qtde ' + esc(it.qtde || '1') + '</span></span>' +
+      '<span class="dica-campo">' + (it.medidas ? esc(it.medidas) + ' m' : 'sem medida') +
+      ' · qtde ' + esc(it.qtde || '1') + '</span></span>' +
       '</label>'
     ).join('') +
     '<div style="display:flex; gap:8px; flex-wrap:wrap; margin-top:12px">' +
@@ -1016,20 +1045,26 @@ function htmlItensDaOS() {
 function itemDaOS(osItem, cfg) {
   const it = novoItem();
   const desc = String(osItem.descricao || '').trim();
+  // O casamento do tipo olha só o começo da descrição (o produto). Depois de
+  // "Modelo:"/"Variação:" vem o material, e "MDF Modelo: … C/ Adesivo" acabava
+  // classificado como Adesivo.
+  const produto = desc.split(/Modelo:|Varia[çc][ãa]o:/i)[0] || desc;
   const tipos = (cfg.tiposItem || []).filter(t => t !== 'Outro')
     .slice().sort((a, z) => z.length - a.length); // mais específico primeiro
-  const achado = tipos.find(t => norm(desc).includes(norm(t)));
+  const achado = tipos.find(t => norm(produto).includes(norm(t)));
   if (achado) it.tipo = achado;
   else { it.tipo = 'Outro'; it.tipoOutro = desc.slice(0, 40) || 'Item da O.S.'; }
   it.detalheServico = desc;
   it.quantidade = String(osItem.qtde || '1').trim() || '1';
   const m = String(osItem.medidas || '').match(/([\d.,]+)\s*[xX×]\s*([\d.,]+)/);
   if (m) {
-    const larg = Math.round(numBr(m[1]) * 100);
-    const alt = Math.round(numBr(m[2]) * 100);
-    if (larg > 0 || alt > 0) it.medidas = [{ largura: larg ? String(larg) : '', altura: alt ? String(alt) : '' }];
+    // Metros → centímetros com 1 casa: 0,905 m tem de virar 90,5 cm, não 91.
+    const cm = v => { const n = Math.round(numBr(v) * 1000) / 10; return n > 0 ? String(n).replace('.', ',') : ''; };
+    const larg = cm(m[1]), alt = cm(m[2]);
+    if (larg || alt) it.medidas = [{ largura: larg, altura: alt }];
   }
   it.origemOS = true;
+  it.osKey = (osItem.descricao || '') + '|' + (osItem.medidas || ''); // liga o item à linha da O.S.
   return it;
 }
 
@@ -1085,7 +1120,7 @@ function htmlEtapa5() {
     '<textarea id="o-briefcliente" rows="3">' + esc(o.briefingCliente) + '</textarea></div>' +
 
     '<div class="linha-2">' +
-    '<div class="campo"><label>Equipe estimada pra instalação</label><input inputmode="numeric" id="o-equipe" placeholder="Nº de pessoas" value="' + esc(o.equipeInstalacao) + '"></div>' +
+    '<div class="campo"><label>Equipe estimada pra instalação</label><input type="text" inputmode="numeric" id="o-equipe" placeholder="Nº de pessoas" value="' + esc(o.equipeInstalacao) + '"></div>' +
     '<div class="campo"><label>Tempo estimado de execução</label><input type="text" id="o-tempo" placeholder="Ex: meio dia, 2 dias" value="' + esc(o.tempoExecucao) + '"></div>' +
     '</div>' +
     '</div></section>'
@@ -1151,16 +1186,36 @@ function ligarEditor(cfg) {
     const el = $(sel); if (!el) return;
     el.oninput = () => { BRIEF[campo] = transf ? transf(el.value, el) : el.value; salvarRascunho(); };
   };
-  bind('#c-cliente', 'cliente');
+  // No desktop as etapas ficam todas na tela: ao completar os dados do cliente,
+  // a etapa 4 precisa destravar na hora (sem isso, o cadeado ficava lá parado).
+  const travaAntes = faltaCliente(BRIEF).length > 0;
+  const redesenharSeDestravou = () => {
+    if (travaAntes && !faltaCliente(BRIEF).length) renderApp();
+  };
+  const cli = $('#c-cliente');
+  if (cli) cli.oninput = () => { BRIEF.cliente = cli.value; salvarRascunho(); redesenharSeDestravou(); };
   bind('#c-responsavel', 'responsavel');
   const tel = $('#c-telefone');
-  if (tel) tel.oninput = () => { tel.value = mascaraTel(tel.value); BRIEF.telefone = tel.value; salvarRascunho(); };
-  // Data e hora digitadas só com números; só grava quando a data fica completa
-  // e válida (senão o autosave gravaria data pela metade a cada tecla).
+  if (tel) tel.oninput = () => {
+    tel.value = mascaraTel(tel.value); BRIEF.telefone = tel.value;
+    salvarRascunho(); redesenharSeDestravou();
+  };
+  // Data e hora digitadas só com números. A hora só é aplicada quando está
+  // completa: sem isso, cada tecla no campo Hora ("1", "10"…) fazia a data ser
+  // gravada à meia-noite e a hora do vendedor se perdia.
   const cData = $('#c-data'), cHora = $('#c-hora');
+  const avisar = (campo, invalida) => {
+    const alvo = $('#aviso-' + campo);
+    if (alvo) alvo.textContent = invalida ? 'Data inválida, confira' : '';
+  };
   const aplicarDataHora = () => {
     if (!cData) return;
-    const iso = dataBrParaISO(cData.value, cHora ? cHora.value : '');
+    const completa = /^\d{2}\/\d{2}\/\d{4}$/.test(cData.value);
+    if (!completa) { avisar('data', false); return; }
+    const horaDigitada = cHora ? cHora.value : '';
+    const hora = /^\d{1,2}:\d{2}$/.test(horaDigitada) ? horaDigitada : isoParaHoraBr(BRIEF.dataHora);
+    const iso = dataBrParaISO(cData.value, hora);
+    avisar('data', !iso);
     if (iso) { BRIEF.dataHora = iso; salvarRascunho(); }
   };
   if (cData) cData.oninput = () => { cData.value = mascaraData(cData.value); aplicarDataHora(); };
@@ -1168,13 +1223,16 @@ function ligarEditor(cfg) {
   const cMed = $('#c-datamedicao');
   if (cMed) cMed.oninput = () => {
     cMed.value = mascaraData(cMed.value);
+    if (!/^\d{2}\/\d{2}\/\d{4}$/.test(cMed.value)) { avisar('medida', false); return; }
     const iso = dataBrParaISO(cMed.value, '12:00');
+    avisar('medida', !iso);
     if (iso) { BRIEF.dataMedicao = iso; salvarRascunho(); }
   };
   const nat = $('#c-natureza'); if (nat) nat.onchange = () => { BRIEF.naturezaServico = nat.value; salvarRascunho(); };
   $$('[data-ambiente]').forEach(ch => ch.onclick = () => {
     const v = ch.dataset.ambiente;
-    const arr = BRIEF.ambientes || (BRIEF.ambientes = []);
+    if (!Array.isArray(BRIEF.ambientes)) BRIEF.ambientes = ambientesDe(BRIEF); // migra o formato antigo
+    const arr = BRIEF.ambientes;
     const i = arr.indexOf(v);
     if (i >= 0) arr.splice(i, 1); else arr.push(v);
     salvarRascunho(true); renderApp();
@@ -1221,48 +1279,86 @@ function ligarEditor(cfg) {
   };
   const bman = $('#btn-manual-4'); if (bman) bman.onclick = () => abrirManual();
 
-  // Recolher/expandir cards
+  // Recolher/expandir: mexe só na classe do card. Redesenhar a tela inteira aqui
+  // faria a página pular pro topo, recarregar as fotos e atropelar o que o
+  // vendedor estivesse digitando.
+  const pintarCard = (cardEl, id) => {
+    const recolhido = ITENS_RECOLHIDOS.has(id);
+    cardEl.classList.toggle('recolhido', recolhido);
+    const bt = $('[data-alternar]', cardEl);
+    if (bt) {
+      bt.setAttribute('aria-expanded', String(!recolhido));
+      const seta = $('.seta', bt);
+      if (seta) seta.textContent = recolhido ? '▸' : '▾';
+    }
+  };
   $$('[data-alternar]').forEach(bt => bt.onclick = () => {
     const id = bt.dataset.alternar;
     if (ITENS_RECOLHIDOS.has(id)) ITENS_RECOLHIDOS.delete(id); else ITENS_RECOLHIDOS.add(id);
-    renderApp();
+    const cardEl = bt.closest('.card-item');
+    if (cardEl) pintarCard(cardEl, id);
+    atualizarRotuloRecolher();
   });
+  function atualizarRotuloRecolher() {
+    const bt = $('#btn-recolher-todos');
+    if (!bt) return;
+    const todos = BRIEF.itens.length && BRIEF.itens.every(i => ITENS_RECOLHIDOS.has(i.id));
+    bt.textContent = todos ? 'Expandir todos' : 'Recolher todos';
+  }
   const recolherTodos = $('#btn-recolher-todos');
-  if (recolherTodos) recolherTodos.onclick = () => {
-    const todosRecolhidos = BRIEF.itens.every(i => ITENS_RECOLHIDOS.has(i.id));
-    BRIEF.itens.forEach(i => { if (todosRecolhidos) ITENS_RECOLHIDOS.delete(i.id); else ITENS_RECOLHIDOS.add(i.id); });
-    renderApp();
-  };
+  if (recolherTodos) {
+    atualizarRotuloRecolher();
+    recolherTodos.onclick = () => {
+      const todosRecolhidos = BRIEF.itens.every(i => ITENS_RECOLHIDOS.has(i.id));
+      BRIEF.itens.forEach(i => { if (todosRecolhidos) ITENS_RECOLHIDOS.delete(i.id); else ITENS_RECOLHIDOS.add(i.id); });
+      $$('.card-item').forEach(el => pintarCard(el, el.dataset.item));
+      atualizarRotuloRecolher();
+    };
+  }
 
   // Itens vindos da O.S.
+  $$('#painel-os-itens input[type="checkbox"]').forEach(cb => cb.onchange = () => {
+    const i = Number(cb.dataset.osidx);
+    if (cb.checked) OS_ITENS_DESMARCADOS.delete(i); else OS_ITENS_DESMARCADOS.add(i);
+  });
   const btnImportar = $('#btn-importar-os');
   if (btnImportar) btnImportar.onclick = () => {
     const marcados = $$('#painel-os-itens input[type="checkbox"]').filter(c => c.checked).map(c => Number(c.dataset.osidx));
     if (!marcados.length) { toast('Marque pelo menos um item', 'erro'); return; }
+    let trazidos = 0;
     marcados.forEach(i => {
       const osIt = (BRIEF.osItens || [])[i];
       if (!osIt || osIt.importado) return;
       BRIEF.itens.push(itemDaOS(osIt, cfg));
       osIt.importado = true;
+      trazidos++;
     });
+    OS_ITENS_DESMARCADOS.clear();
     salvarRascunho(true); renderApp();
-    toast(marcados.length + ' item(ns) trazidos da O.S. Confira as medidas no local.', 'sucesso');
+    toast(trazidos + ' item(ns) trazidos da O.S. Confira as medidas no local.', 'sucesso');
   };
   const btnDescartar = $('#btn-descartar-os');
-  if (btnDescartar) btnDescartar.onclick = () => {
-    (BRIEF.osItens || []).forEach(x => { x.importado = true; });
-    salvarRascunho(true); renderApp();
-  };
+  if (btnDescartar) btnDescartar.onclick = () => confirmar('Não usar os itens da O.S.',
+    'A lista some desta tela. Você pode trazê-la de volta buscando a O.S. de novo na etapa 2.', 'Não usar', () => {
+      (BRIEF.osItens || []).forEach(x => { x.importado = true; });
+      salvarRascunho(true); renderApp();
+    });
 
   // Visita concluída: nome de quem fechou + carimbo automático de data e hora
   const btnConcluir = $('#btn-concluir-visita');
   if (btnConcluir) btnConcluir.onclick = () => abrirConcluirVisita();
   const btnReabrir = $('#btn-reabrir-visita');
-  if (btnReabrir) btnReabrir.onclick = () => confirmar('Reabrir visita',
-    'A marcação de conclusão será apagada e o envio volta a ficar bloqueado.', 'Reabrir', () => {
-      BRIEF.visitaConcluida = null;
-      salvarRascunho(true); renderApp();
-    });
+  if (btnReabrir) btnReabrir.onclick = () => {
+    const idNaHora = BRIEF.id;
+    confirmar('Reabrir visita',
+      'A marcação de conclusão será apagada e o envio volta a ficar bloqueado.', 'Reabrir', () => {
+        // O modal sobrevive à troca de tela: confere se ainda é o mesmo briefing
+        if (!BRIEF || BRIEF.id !== idNaHora) return;
+        if (BRIEF.situacao === 'enviado') { toast('Briefing já enviado, não dá pra reabrir a visita', 'erro'); return; }
+        BRIEF.visitaConcluida = null;
+        salvarRascunho(true); renderApp();
+      });
+  };
 
   $$('.card-item').forEach(cardEl => ligarItem(cardEl, cfg));
   const btnCroqui = $('#btn-add-croqui');
@@ -1382,6 +1478,12 @@ function ligarItem(cardEl, cfg) {
   if (remover) remover.onclick = () => confirmar('Remover item',
     'Remover este item e as fotos dele do briefing?', 'Remover', () => {
       (item.fotos || []).forEach(f => STORE.delFotoSync(f.id));
+      // Se veio da O.S., devolve a linha para a lista (dá pra trazer de novo)
+      if (item.osKey) {
+        const osIt = (BRIEF.osItens || []).find(x => (x.descricao || '') + '|' + (x.medidas || '') === item.osKey);
+        if (osIt) osIt.importado = false;
+      }
+      ITENS_RECOLHIDOS.delete(itemId);
       BRIEF.itens = BRIEF.itens.filter(i => i.id !== itemId);
       salvarRascunho(true); renderApp();
     }, true);
@@ -1524,8 +1626,14 @@ async function buscarOS(botao) {
 function abrirConcluirVisita() {
   const sugerido = BRIEF.quemMediu || BRIEF.vendedor || (SESSAO && SESSAO.nome) || '';
   const agora = new Date();
+  // Itens incompletos podem estar recolhidos e passar despercebidos
+  const faltando = BRIEF.itens.filter(i => !itemCompleto(i));
   const m = abrirModal(
     '<h3>Concluir a visita</h3>' +
+    (faltando.length
+      ? '<div class="aviso amarelo">Atenção: ' + faltando.length + ' item(ns) ainda sem medida ou sem as 3 fotos. ' +
+        'Dá pra concluir assim, mas o envio pro design só libera quando estiverem completos.</div>'
+      : '') +
     '<p class="dica-campo">A data e a hora são marcadas automaticamente agora: <b>' +
     esc(fmtDataHora(agora.toISOString())) + '</b>.</p>' +
     '<div class="campo" style="margin-top:12px"><label>Quem concluiu a visita</label>' +
@@ -1620,7 +1728,7 @@ function renderDetalhe(app) {
     linha('Quem mediu', esc(b.quemMediu)) +
     linha('Visita concluída', b.visitaConcluida ? esc(b.visitaConcluida.por) + ' · ' + fmtDataHora(b.visitaConcluida.em) : '') +
     linha('Natureza', esc(b.naturezaServico)) +
-    linha('Ambiente', esc((b.ambientes || []).join(' e '))) +
+    linha('Ambiente', esc(ambientesDe(b).join(' e '))) +
     linha('Serviço da O.S.', esc(b.osServico)) +
     linha('Enviado em', b.enviadoEm ? fmtDataHora(b.enviadoEm) : '') +
     '</dl></div>' +
@@ -1748,7 +1856,7 @@ function abrirVincularOS(b) {
     '<h3>Vincular O.S.</h3>' +
     '<p class="dica-campo">Busca no Mubisys/PCP ou digita direto o número.</p>' +
     '<div class="campo" style="margin-top:10px"><label>Número da O.S.</label>' +
-    '<input id="v-numero" inputmode="numeric" value="' + esc(b.osNumero || '') + '"></div>' +
+    '<input id="v-numero" type="text" inputmode="numeric" value="' + esc(b.osNumero || '') + '"></div>' +
     '<div id="v-resultado"></div>' +
     '<div class="acoes-modal">' +
     '<button class="botao suave btn-buscar">Buscar</button>' +
@@ -1898,7 +2006,7 @@ function adminArquivos(alvo) {
     '<div class="card"><div class="sub-secao">Limpeza em lote de fotos</div>' +
     '<p class="dica-campo" style="margin-bottom:10px">Apaga só as FOTOS de briefings CONCLUÍDOS antigos. Os dados e o PDF (sem fotos) continuam. Exporte os PDFs importantes antes.</p>' +
     '<div class="linha-2" style="align-items:end"><div class="campo" style="margin:0"><label>Concluídos há mais de (meses)</label>' +
-    '<input id="lm-meses" inputmode="numeric" value="6"></div>' +
+    '<input id="lm-meses" type="text" inputmode="numeric" value="6"></div>' +
     '<button class="botao perigo" id="btn-limpeza">Executar limpeza</button></div>' +
     '<div id="lm-resultado"></div></div>' +
     '<div class="card"><div class="sub-secao">Backup deste aparelho</div>' +

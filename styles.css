@@ -110,14 +110,24 @@ a { color: var(--indigo); }
 .campo > label { display: block; font-family: 'Poppins'; font-weight: 600; font-size: .85rem; margin-bottom: 6px; }
 .campo .obrig { color: var(--perigo); }
 .campo .dica-campo { font-size: .78rem; color: var(--cinza); margin-top: 4px; }
-input[type=text], input[type=tel], input[type=number], input[type=date], input[type=datetime-local], input[type=password], input[type=search], select, textarea {
+.erro-campo { color: var(--perigo); font-family: 'Poppins'; font-weight: 600; }
+/* input:not([type]) entra aqui de propósito: um input sem o atributo type NÃO
+   casa com input[type=text], e ficava sem estilo nenhum (caixinha nativa). */
+input[type=text], input[type=tel], input[type=number], input[type=date], input[type=datetime-local], input[type=password], input[type=search], input:not([type]), select, textarea {
   width: 100%; padding: 13px 13px; border: 1.5px solid var(--borda); border-radius: 11px;
   background: var(--branco); font-size: 1.02rem; min-height: 48px;
 }
 textarea { min-height: 84px; resize: vertical; }
 input:focus, select:focus, textarea:focus { outline: none; border-color: var(--indigo); box-shadow: 0 0 0 3px var(--indigo-15); }
-.linha-2 { display: grid; grid-template-columns: 1fr 1fr; gap: 10px; }
-.linha-3 { display: grid; grid-template-columns: 1fr 1fr 1fr; gap: 10px; }
+/* Colunas colapsam em telas estreitas pra caixa nenhuma espremer o dedo do vendedor */
+.linha-2 { display: grid; grid-template-columns: 1fr; gap: 10px; }
+.linha-3 { display: grid; grid-template-columns: 1fr 1fr; gap: 10px; }
+.linha-3 > *:first-child { grid-column: 1 / -1; }
+@media (min-width: 560px) {
+  .linha-2 { grid-template-columns: 1fr 1fr; }
+  .linha-3 { grid-template-columns: 1fr 1fr 1fr; }
+  .linha-3 > *:first-child { grid-column: auto; }
+}
 
 /* Botões */
 .botao {
