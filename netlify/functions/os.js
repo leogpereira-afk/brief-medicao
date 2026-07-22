@@ -120,50 +120,6 @@ exports.handler = async (event, context) => {
         return resp(out);
       }
 
-      // ── diagCas: descobre o que a API de escrita condicional do Blobs devolve ─
-      case 'diagCas': {
-        const s = blobStore('cfg');
-        const chave = 'diag_cas_' + Math.random().toString(36).slice(2, 8);
-        const out = {};
-        try {
-          const r1 = await s.set(chave, JSON.stringify({ n: 1 }), { onlyIfNew: true });
-          out.onlyIfNew_novo = { tipo: typeof r1, valor: r1 };
-        } catch (e) { out.onlyIfNew_novo = 'ERR: ' + (e && e.message); }
-        try {
-          const meta = await s.getWithMetadata(chave, { type: 'json' });
-          out.getWithMetadata = { temEtag: !!(meta && meta.etag), etag: meta && meta.etag, data: meta && meta.data };
-          out._etag = meta && meta.etag;
-        } catch (e) { out.getWithMetadata = 'ERR: ' + (e && e.message); }
-        try {
-          const r2 = await s.set(chave, JSON.stringify({ n: 2 }), { onlyIfNew: true });
-          out.onlyIfNew_existente = { tipo: typeof r2, valor: r2 };
-        } catch (e) { out.onlyIfNew_existente = 'ERR: ' + (e && e.message); }
-        try {
-          const r3 = await s.set(chave, JSON.stringify({ n: 3 }), { onlyIfMatch: 'etag-errado-de-proposito' });
-          out.onlyIfMatch_errado = { tipo: typeof r3, valor: r3 };
-        } catch (e) { out.onlyIfMatch_errado = 'ERR: ' + (e && e.message); }
-        try {
-          const r4 = await s.set(chave, JSON.stringify({ n: 4 }), { onlyIfMatch: out._etag });
-          out.onlyIfMatch_certo = { tipo: typeof r4, valor: r4 };
-        } catch (e) { out.onlyIfMatch_certo = 'ERR: ' + (e && e.message); }
-        try { await s.delete(chave); } catch {}
-        delete out._etag;
-        return resp(out);
-      }
-
-      // ── claimTest: reivindica uma chave fixa com onlyIfNew (teste de atomicidade)
-      case 'claimTest': {
-        const s = blobStore('cfg');
-        const chave = 'claimtest_' + (body.rodada || 'x');
-        const meuId = body.id || Math.random().toString(36).slice(2);
-        let modified = null, erro = null;
-        try {
-          const r = await s.set(chave, meuId, { onlyIfNew: true });
-          modified = r && r.modified;
-        } catch (e) { erro = (e && e.message) || String(e); }
-        return resp({ id: meuId, modified, erro });
-      }
-
       // ── list: retorna os briefings em páginas ───────────────────────────────
       // Paginado para a resposta nunca passar do limite de ~6 MB das Netlify
       // Functions. O cliente percorre as páginas usando "after"/"nextAfter".
