@@ -46,7 +46,6 @@ const PRANCHA = (() => {
         T('MATERIAL', ['ACM', 'PVC EXP.', 'POLICARBONATO', 'MDF', 'ACRÍLICO', 'PS'], ['ESPESSURA']),
         T('ACABAMENTO', ['CORTE', 'REBAIXO', 'FRISAGEM'])
       ],
-      selos: ['espelhado'],
       rodape: 'tecnica-producao'
     },
     'Fibra letra caixa': {
@@ -231,13 +230,15 @@ const PRANCHA = (() => {
     if (empresa.email) { doc.text(cortar(doc, empresa.email, 106), xc, yc, { align: 'right' }); }
 
     // Bloco do meio: cliente/contato, vend/designer, entrega
+    // Cliente ocupa mais espaço que contato: nome de empresa costuma ser longo
+    const corte = wMeio * 0.56;
     caixa(doc, xMeio, y0, wMeio, linha);
-    rotuloValor(doc, 'Cliente:', p.cliente, xMeio + 8, y0 + linha / 2 + 4, wMeio / 2 - 10, 10.5);
-    rotuloValor(doc, 'Contato:', p.contato, xMeio + wMeio / 2 + 6, y0 + linha / 2 + 4, wMeio / 2 - 14, 10.5);
+    rotuloValor(doc, 'Cliente:', p.cliente, xMeio + 8, y0 + linha / 2 + 4, corte - 12, 10.5);
+    rotuloValor(doc, 'Contato:', p.contato, xMeio + corte, y0 + linha / 2 + 4, wMeio - corte - 10, 10.5);
 
     caixa(doc, xMeio, y0 + linha, wMeio, linha);
-    rotuloValor(doc, 'Vend:', p.vendedor, xMeio + 8, y0 + linha * 1.5 + 4, wMeio / 2 - 10, 10.5);
-    rotuloValor(doc, 'Designer:', p.designer, xMeio + wMeio / 2 + 6, y0 + linha * 1.5 + 4, wMeio / 2 - 14, 10.5);
+    rotuloValor(doc, 'Vend:', p.vendedor, xMeio + 8, y0 + linha * 1.5 + 4, corte - 12, 10.5);
+    rotuloValor(doc, 'Designer:', p.designer, xMeio + corte, y0 + linha * 1.5 + 4, wMeio - corte - 10, 10.5);
 
     caixa(doc, xMeio, y0 + linha * 2, wMeio, linha);
     if (modelo.endEntregaNoCabecalho) {
@@ -302,9 +303,13 @@ const PRANCHA = (() => {
     doc.rect(wRot, y, W - wRot, alt, 'F');
     doc.setFont('Poppins', 'bold'); doc.setTextColor(255, 255, 255); doc.setFontSize(15);
     doc.text('A T E N Ç Ã O', wRot / 2, y + 18, { align: 'center' });
-    doc.setFontSize(10);
-    doc.text('É obrigatório conferir se o tamanho do arquivo exportado corresponde ao tamanho especificado no layout.',
-      wRot + 14, y + 17);
+    // O aviso precisa caber inteiro na faixa azul: encolhe até caber
+    const aviso = 'É obrigatório conferir se o tamanho do arquivo exportado corresponde ao tamanho especificado no layout.';
+    const largDisp = W - wRot - 28;
+    let fs = 10;
+    doc.setFontSize(fs);
+    while (doc.getTextWidth(aviso) > largDisp && fs > 6) { fs -= 0.2; doc.setFontSize(fs); }
+    doc.text(aviso, wRot + 14, y + 17);
     return y + alt;
   }
 
@@ -361,32 +366,41 @@ const PRANCHA = (() => {
   }
 
   // ── Carimbos ──────────────────────────────────────────────────────────────
+  // Texto que sempre cabe dentro de um círculo de raio r
+  function textoNoCirculo(doc, texto, x, y, r, fsInicial) {
+    let fs = fsInicial;
+    doc.setFontSize(fs);
+    while (doc.getTextWidth(texto) > r * 1.7 && fs > 5) { fs -= 0.3; doc.setFontSize(fs); }
+    doc.text(texto, x, y, { align: 'center' });
+    return fs;
+  }
+
   function carimboUrgente(doc, x, y) {
-    doc.saveGraphicsState();
+    const r = 32;
     doc.setDrawColor(...VERMELHO); doc.setLineWidth(2.4);
-    doc.circle(x, y, 30, 'S');
+    doc.circle(x, y, r, 'S');
     doc.setLineWidth(1);
-    doc.circle(x, y, 26, 'S');
-    doc.setFont('Poppins', 'bold'); doc.setFontSize(13); doc.setTextColor(...VERMELHO);
-    doc.text('URGENTE!', x, y + 4.5, { align: 'center', angle: 8 });
-    doc.restoreGraphicsState();
+    doc.circle(x, y, r - 4, 'S');
+    doc.setFont('Poppins', 'bold'); doc.setTextColor(...VERMELHO);
+    textoNoCirculo(doc, 'URGENTE!', x, y + 4, r - 4, 12);
   }
 
   function carimboEspelhado(doc, x, y) {
     const AZUL = [41, 171, 226];
+    const r = 46;
     doc.setDrawColor(...AZUL); doc.setLineWidth(2.2);
-    doc.circle(x, y, 44, 'S');
+    doc.circle(x, y, r, 'S');
     doc.setLineWidth(1.1);
-    doc.circle(x, y, 34, 'S');
-    doc.setFont('Poppins', 'bold'); doc.setFontSize(9.5); doc.setTextColor(...AZUL);
-    doc.text('A R Q U I V O', x, y - 18, { align: 'center' });
-    doc.text('E S P E L H A D O', x, y + 30, { align: 'center' });
+    doc.circle(x, y, r - 10, 'S');
+    doc.setFont('Poppins', 'bold'); doc.setTextColor(...AZUL);
+    textoNoCirculo(doc, 'A R Q U I V O', x, y - 22, r - 6, 8.5);
+    textoNoCirculo(doc, 'E S P E L H A D O', x, y + 33, r - 6, 8.5);
     doc.setDrawColor(...AZUL); doc.setLineWidth(1);
     doc.setLineDashPattern([2, 2], 0);
-    doc.rect(x - 20, y - 12, 20, 24);
+    doc.rect(x - 19, y - 11, 18, 22);
     doc.setLineDashPattern([], 0);
     doc.setFillColor(...AZUL);
-    doc.rect(x + 1, y - 12, 20, 24, 'F');
+    doc.rect(x + 2, y - 11, 18, 22, 'F');
   }
 
   // ── Rodapé de liberação ───────────────────────────────────────────────────
@@ -476,8 +490,9 @@ const PRANCHA = (() => {
       doc.text(doc.splitTextToSize(String(p.medidas), wArte).slice(0, 3), xArte, yFimCorpo - 26);
     }
 
+    // Carimbos são opcionais: só saem quando o designer marca na prévia
     if (p.urgente) carimboUrgente(doc, W - 78, yCorpo + 56);
-    if ((modelo.selos || []).includes('espelhado')) carimboEspelhado(doc, W * 0.42, yFimCorpo - 130);
+    if (p.espelhado) carimboEspelhado(doc, W * 0.42, yFimCorpo - 130);
     rodapeLiberacao(doc, modelo.rodape, H - 14);
   }
 

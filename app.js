@@ -872,7 +872,10 @@ function abrirPreviaLote() {
       '<input type="text" inputmode="numeric" maxlength="10" placeholder="dd/mm/aaaa" data-pdata="' + i + '" value="' + esc(p.dataEntrega ? isoParaDataBr(p.dataEntrega) : '') + '"></div>' +
       '</div>' +
       '<div class="campo"><label>Obs</label><input type="text" data-pcampo="obs" data-pi="' + i + '" value="' + esc(p.obs) + '"></div>' +
-      '<label class="chip ' + (p.urgente ? 'marcado' : '') + '" data-urgente="' + i + '" style="margin-bottom:10px; display:inline-flex">🔴 Marcar URGENTE</label>' +
+      '<div class="chips" style="margin-bottom:10px">' +
+      '<button class="chip ' + (p.urgente ? 'marcado' : '') + '" data-carimbo="urgente" data-pi="' + i + '">Carimbo URGENTE</button>' +
+      '<button class="chip ' + (p.espelhado ? 'marcado' : '') + '" data-carimbo="espelhado" data-pi="' + i + '">Arquivo espelhado</button>' +
+      '</div>' +
       '<div class="acoes-prancha">' +
       (p.imagem ? '<img class="thumb-prancha" src="' + p.imagem + '" alt="">' : '<span class="dica-campo">sem imagem</span>') +
       '<button class="botao mini suave" data-troca-img="' + i + '">Trocar foto</button>' +
@@ -897,10 +900,10 @@ function abrirPreviaLote() {
       }
     };
   });
-  $$('[data-urgente]', m).forEach(ch => ch.onclick = () => {
-    const i = Number(ch.dataset.urgente);
-    LOTE.itens[i].urgente = !LOTE.itens[i].urgente;
-    ch.classList.toggle('marcado', LOTE.itens[i].urgente);
+  $$('[data-carimbo]', m).forEach(ch => ch.onclick = () => {
+    const i = Number(ch.dataset.pi), campo = ch.dataset.carimbo;
+    LOTE.itens[i][campo] = !LOTE.itens[i][campo];
+    ch.classList.toggle('marcado', LOTE.itens[i][campo]);
   });
   $$('[data-pdata]', m).forEach(el => el.oninput = () => {
     el.value = mascaraData(el.value);
@@ -971,7 +974,8 @@ async function salvarLoteNoBriefing() {
     id: p.id, numero: p.numero, total: p.total,
     seloServico: p.seloServico, setor: p.setor || '', tituloServico: p.tituloServico,
     medidas: p.medidas, detalhe: p.detalhe || '', obs: p.obs,
-    dataEntrega: p.dataEntrega || '', urgente: !!p.urgente, imagemId: p.imagemId || null,
+    dataEntrega: p.dataEntrega || '', urgente: !!p.urgente, espelhado: !!p.espelhado,
+    imagemId: p.imagemId || null,
     cliente: p.cliente, contato: p.contato, vendedor: p.vendedor, designer: p.designer,
     osNumero: p.osNumero, endereco: p.endereco, data: p.data,
     equipe: p.equipe || [], ferramentas: p.ferramentas || [], acessorios: p.acessorios || []
