@@ -21,7 +21,7 @@ function blobStore(name) {
   return getStore(name);
 }
 
-// Todas as fotos referenciadas por um briefing (itens + croquis).
+// Todas as fotos referenciadas por um briefing (itens + croquis + pranchas).
 function fotoIdsDoBriefing(b) {
   if (!b) return [];
   const ids = [];
@@ -29,6 +29,10 @@ function fotoIdsDoBriefing(b) {
     for (const f of (item.fotos || [])) if (f && f.id && !f.arquivada) ids.push(f.id);
   }
   for (const c of (b.croquis || [])) if (c && c.id && !c.arquivada) ids.push(c.id);
+  // Imagens usadas nas pranchas geradas (arte final do modo projeto, trocas)
+  for (const v of (b.pranchas || [])) {
+    for (const p of (v.itens || [])) if (p && p.imagemId) ids.push(p.imagemId);
+  }
   return ids;
 }
 
@@ -360,6 +364,11 @@ exports.handler = async (event, context) => {
           for (const c of (b.croquis || [])) {
             if (c && !c.arquivada) { fb += (c.bytes || 0); fq++; }
           }
+          // Imagens das pranchas contam no mesmo bolo de fotos
+          for (const v of (b.pranchas || [])) {
+            fb += (v.bytes || 0);
+            for (const p of (v.itens || [])) if (p && p.imagemId) fq++;
+          }
           fotosBytes += fb; fotosQtd += fq;
           if (b.apagadoEm) lixeira++;
           const mes = String(b.criadoEm || '').slice(0, 7) || 'sem data';
@@ -435,6 +444,17 @@ exports.handler = async (event, context) => {
             for (const f of (item.fotos || [])) await arquivar(f);
           }
           for (const c of (b.croquis || [])) await arquivar(c);
+          // Imagens das pranchas também saem na limpeza (os dados ficam)
+          for (const v of (b.pranchas || [])) {
+            for (const p of (v.itens || [])) {
+              if (p && p.imagemId && !p.imagemArquivada) {
+                await fotosStore.delete(p.imagemId).catch(() => {});
+                p.imagemArquivada = true;
+                fotosApagadas++;
+                mexeu = true;
+              }
+            }
+          }
 
           if (mexeu) {
             b.atualizadoEm = new Date().toISOString();

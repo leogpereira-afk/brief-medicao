@@ -366,13 +366,17 @@ async function boot() {
 function lerRota() {
   const h = location.hash.replace(/^#\/?/, '');
   const partes = h.split('/');
-  if (!SESSAO && h !== 'login') { ROTA = { nome: 'login' }; return; }
-  if (h === '' || h === 'lista') ROTA = { nome: 'lista' };
-  else if (h === 'login') ROTA = { nome: 'login' };
+  // Porta de entrada: escolhe Comercial ou Designer antes de qualquer login
+  if (h === '' || h === 'inicio') { ROTA = { nome: 'inicio' }; return; }
+  if (partes[0] === 'entrar') { ROTA = { nome: 'login', area: partes[1] || 'comercial' }; return; }
+  if (!SESSAO) { ROTA = { nome: 'inicio' }; return; }
+  if (h === 'lista') ROTA = { nome: 'lista' };
+  else if (h === 'login') ROTA = { nome: 'login', area: 'comercial' };
   else if (h === 'novo') ROTA = { nome: 'novo' };
   else if (partes[0] === 'editar') ROTA = { nome: 'editor', id: partes[1] };
-  else if (partes[0] === 'b') ROTA = { nome: 'detalhe', id: partes[1] };
+  else if (partes[0] === 'b') ROTA = { nome: 'detalhe', id: partes[1], aba: partes[2] || 'dados' };
   else if (partes[0] === 'admin') ROTA = { nome: 'admin', aba: partes[1] || 'usuarios' };
+  else if (partes[0] === 'layout') ROTA = { nome: 'layout', modo: partes[1] || '', id: partes[2] || '' };
   else ROTA = { nome: 'lista' };
 }
 
@@ -390,8 +394,9 @@ function htmlTopo(tituloTela) {
     '<div class="sub">Impresilk · ' + esc(SESSAO ? SESSAO.nome : '') + '</div></div>' +
     '</div>' +
     '<nav class="nav-desktop">' +
-    '<a href="#/" class="' + (ROTA.nome === 'lista' ? 'ativo' : '') + '">Briefings</a>' +
+    '<a href="#/lista" class="' + (ROTA.nome === 'lista' ? 'ativo' : '') + '">Briefings</a>' +
     (podeCriar() ? '<a href="#/novo">+ Novo</a>' : '') +
+    (podeUsarLayout() ? '<a href="#/layout" class="' + (ROTA.nome === 'layout' ? 'ativo' : '') + '">Gerador de layout</a>' : '') +
     (SESSAO && SESSAO.papel === 'admin' ? '<a href="#/admin" class="' + (ROTA.nome === 'admin' ? 'ativo' : '') + '">Painel de controle</a>' : '') +
     '<a href="#" id="link-sair-desktop">Sair</a>' +
     '</nav>' +
@@ -418,9 +423,11 @@ function abrirMenu() {
   sheet.innerHTML =
     '<div class="quem">' + esc(SESSAO.nome) + '</div>' +
     '<div class="papel">Perfil: ' + esc(SESSAO.papel) + '</div>' +
-    '<a href="#/">📋 Briefings</a>' +
+    '<a href="#/lista">📋 Briefings</a>' +
     (podeCriar() ? '<a href="#/novo">➕ Novo briefing</a>' : '') +
+    (podeUsarLayout() ? '<a href="#/layout">🗂 Gerador de layout</a>' : '') +
     (SESSAO.papel === 'admin' ? '<a href="#/admin">🛠 Painel de controle</a>' : '') +
+    '<a href="#/">🏠 Tela inicial</a>' +
     '<button class="item" id="menu-ficha">🖨 Ficha de visita em branco (PDF)</button>' +
     '<button class="item" id="menu-manual">❓ Manual de medição e fotos</button>' +
     '<button class="item" id="menu-sync">🔄 Sincronizar agora</button>' +
@@ -446,8 +453,10 @@ function sairDaConta() {
 function renderApp() {
   const app = $('#app');
   flushSalvar(); // nunca redesenhar por cima de digitação ainda não gravada
-  if (!SESSAO && ROTA.nome !== 'login') { location.hash = '#/login'; return; }
+  if (!SESSAO && ROTA.nome !== 'login' && ROTA.nome !== 'inicio') { location.hash = '#/'; return; }
   switch (ROTA.nome) {
+    case 'inicio': return renderInicio(app);
+    case 'layout': return renderLayout(app);
     case 'login': return renderLogin(app);
     case 'novo': return criarNovo();
     case 'editor': return renderEditor(app);
@@ -457,21 +466,87 @@ function renderApp() {
   }
 }
 
+/* ══════════════════ Tela inicial ══════════════════ */
+
+// Qual área cada perfil pode abrir
+const AREAS = {
+  comercial: { rotulo: 'Comercial', papeis: ['vendedor', 'admin'], destino: '#/lista' },
+  designer:  { rotulo: 'Designer',  papeis: ['designer', 'admin'], destino: '#/lista' },
+  admin:     { rotulo: 'Painel de controle', papeis: ['admin'],    destino: '#/admin' }
+};
+
+function renderInicio(app) {
+  document.title = 'Impresilk · Brief de Medição';
+  // Já logado neste aparelho: entra direto na área do perfil
+  const atalho = SESSAO
+    ? '<div class="aviso-sessao">Conectado como <b>' + esc(SESSAO.nome) + '</b> (' + esc(SESSAO.papel) + ')' +
+      ' · <a href="#" id="ini-sair">trocar de usuário</a></div>'
+    : '';
+  app.innerHTML =
+    '<div class="tela-inicio">' +
+    '<div class="miolo-inicio">' +
+    '<img class="logo-inicio" src="logo-impresilk.png" alt="Impresilk">' +
+    '<h1 class="titulo-inicio">Brief de Medição</h1>' +
+    '<p class="sub-inicio">Escolha por onde você entra</p>' +
+    atalho +
+    '<div class="portas">' +
+    '<button class="porta" data-area="comercial">' +
+    '<span class="icone-porta">📐</span>' +
+    '<span class="nome-porta">COMERCIAL</span>' +
+    '<span class="desc-porta">Fazer o briefing na visita ao cliente</span></button>' +
+    '<button class="porta" data-area="designer">' +
+    '<span class="icone-porta">🎨</span>' +
+    '<span class="nome-porta">DESIGNER</span>' +
+    '<span class="desc-porta">Receber briefings e gerar pranchas</span></button>' +
+    '</div>' +
+    '<a href="#" class="link-admin" id="ini-admin">Painel de controle</a>' +
+    '</div></div>';
+
+  $$('[data-area]').forEach(bt => bt.onclick = () => irParaArea(bt.dataset.area));
+  $('#ini-admin').onclick = e => { e.preventDefault(); irParaArea('admin'); };
+  const sair = $('#ini-sair');
+  if (sair) sair.onclick = e => {
+    e.preventDefault();
+    STORE.setUser(null); SESSAO = null; renderApp();
+  };
+}
+
+// Entra na área: se já há login válido pra ela, vai direto; senão pede o login.
+function irParaArea(area) {
+  const def = AREAS[area] || AREAS.comercial;
+  if (SESSAO && def.papeis.includes(SESSAO.papel)) {
+    location.hash = def.destino;
+    return;
+  }
+  if (SESSAO) {
+    toast('Seu usuário (' + SESSAO.papel + ') não abre a área ' + def.rotulo + '. Troque de usuário.', 'erro');
+  }
+  location.hash = '#/entrar/' + area;
+}
+
 /* ══════════════════ Login ══════════════════ */
 
 function renderLogin(app) {
-  document.title = 'Entrar · Brief de Medição';
+  const area = ROTA.area || 'comercial';
+  const def = AREAS[area] || AREAS.comercial;
+  document.title = 'Entrar · ' + def.rotulo;
+  // Login lembrado no aparelho: só falta a senha
+  const lembrado = STORE.getUsuarioLembrado ? STORE.getUsuarioLembrado() : '';
   app.innerHTML =
     '<div class="tela-login"><div class="cartao-login">' +
     '<img class="logo" src="logo-impresilk.png" alt="Impresilk">' +
-    '<h1>Brief de Medição</h1>' +
+    '<h1>' + esc(def.rotulo) + '</h1>' +
     '<div class="sub">Entre com seu usuário da equipe</div>' +
-    '<div class="campo"><label>Usuário</label><input id="lg-usuario" type="text" autocomplete="username" autocapitalize="none"></div>' +
+    '<div class="campo"><label>Usuário</label><input id="lg-usuario" type="text" autocomplete="username" autocapitalize="none" value="' + esc(lembrado) + '"></div>' +
     '<div class="campo"><label>Senha</label><input id="lg-senha" type="password" autocomplete="current-password"></div>' +
+    '<label class="chip marcado" id="lg-lembrar" style="margin-bottom:12px; display:inline-flex">Lembrar neste aparelho</label>' +
     '<div id="lg-erro"></div>' +
     '<button class="botao largo" id="lg-entrar">Entrar</button>' +
+    '<a href="#/" class="voltar-inicio">← voltar</a>' +
     '<p class="dica-campo" style="text-align:center; margin-top:12px">Primeiro acesso neste aparelho precisa de internet.</p>' +
     '</div></div>';
+  let lembrar = true;
+  $('#lg-lembrar').onclick = () => { lembrar = !lembrar; $('#lg-lembrar').classList.toggle('marcado', lembrar); };
   const entrar = async () => {
     const usuario = $('#lg-usuario').value.trim();
     const senha = $('#lg-senha').value;
@@ -486,12 +561,476 @@ function renderLogin(app) {
       $('#lg-erro').innerHTML = '<div class="aviso vermelho">Este usuário está desativado. Fale com o admin.</div>';
       return;
     }
+    if (!def.papeis.includes(u.papel)) {
+      $('#lg-erro').innerHTML = '<div class="aviso vermelho">O usuário <b>' + esc(u.usuario) +
+        '</b> é ' + esc(u.papel) + ' e não abre a área ' + esc(def.rotulo) + '.</div>';
+      return;
+    }
     STORE.setUser({ usuario: u.usuario, nome: u.nome, papel: u.papel });
+    STORE.setUsuarioLembrado(lembrar ? u.usuario : '');
     SESSAO = STORE.getUser();
-    location.hash = '#/';
+    location.hash = def.destino;
   };
   $('#lg-entrar').onclick = entrar;
   $('#lg-senha').addEventListener('keydown', e => { if (e.key === 'Enter') entrar(); });
+}
+
+/* ══════════════════ Gerador de layout (pranchas) ══════════════════ */
+
+let LOTE = null; // lote de pranchas sendo montado na tela
+
+function podeUsarLayout() {
+  return SESSAO && (SESSAO.papel === 'designer' || SESSAO.papel === 'admin');
+}
+
+// Monta a prancha a partir de um briefing (ou dos dados avulsos do modo projeto)
+function montarPrancha(base, extra) {
+  const cfg = STORE.getCFG();
+  const b = base || {};
+  return Object.assign({
+    id: STORE.uuid(),
+    cliente: b.cliente || '',
+    contato: b.responsavel || b.cliente || '',
+    vendedor: b.vendedor || '',
+    designer: (SESSAO && SESSAO.nome) || '',
+    osNumero: String(b.osNumero || '').trim(),
+    endereco: b.endereco || '',
+    data: new Date().toISOString(),
+    dataEntrega: '',
+    obs: '',
+    seloServico: '',
+    tituloServico: '',
+    medidas: '',
+    detalhe: '',
+    imagem: null,      // base64 só na hora de gerar (não vai pro registro)
+    imagemId: null,    // referência da foto no store
+    equipe: [], ferramentas: [], acessorios: [],
+    numero: 1, total: 1,
+    textoDireitos: cfg.textoDireitos || ''
+  }, extra || {});
+}
+
+// Resumo das medidas do briefing pro corpo da prancha
+function medidasDoBriefing(b) {
+  return (b.itens || []).map((it, i) => {
+    const med = (it.medidas || []).filter(m => m.largura || m.altura)
+      .map(m => (m.largura || '?') + ' x ' + (m.altura || '?') + ' cm').join('  ·  ');
+    const q = it.quantidade && String(it.quantidade) !== '1' ? ' (' + it.quantidade + 'x)' : '';
+    return (nomeItem(it) || 'Item ' + (i + 1)) + q + (med ? ': ' + med : '');
+  }).join('\n');
+}
+
+// Primeira foto útil do briefing, pro corpo da prancha
+function fotoPrincipal(b) {
+  for (const it of (b.itens || [])) {
+    const f = (it.fotos || []).find(x => !x.arquivada);
+    if (f) return f.id;
+  }
+  const c = (b.croquis || []).find(x => !x.arquivada);
+  return c ? c.id : null;
+}
+
+function renderLayout(app) {
+  if (!podeUsarLayout()) { toast('O gerador de layout é da área do designer', 'erro'); location.hash = '#/lista'; return; }
+  const modo = ROTA.modo;
+  if (modo === 'producao') return renderLayoutProducao(app);
+  if (modo === 'projeto') return renderLayoutProjeto(app);
+  return renderLayoutInicio(app);
+}
+
+function renderLayoutInicio(app) {
+  document.title = 'Gerador de layout';
+  app.innerHTML =
+    htmlTopo('Gerador de layout') +
+    '<main class="miolo">' +
+    '<p class="dica-campo" style="margin:4px 2px 16px">As duas opções usam o mesmo modelo de prancha, preenchido automático.</p>' +
+    '<div class="portas portas-layout">' +
+    '<button class="porta" data-modo="producao">' +
+    '<span class="icone-porta">🏭</span><span class="nome-porta">PRODUÇÃO</span>' +
+    '<span class="desc-porta">Uma prancha por setor, a partir de um briefing</span></button>' +
+    '<button class="porta" data-modo="projeto">' +
+    '<span class="icone-porta">🖼</span><span class="nome-porta">PROJETO</span>' +
+    '<span class="desc-porta">Layout aprovado: solta os JPGs e sai o PDF</span></button>' +
+    '</div></main>';
+  ligarTopo();
+  $$('[data-modo]').forEach(bt => bt.onclick = () => { location.hash = '#/layout/' + bt.dataset.modo; });
+}
+
+/* ── Modo Produção ─────────────────────────────────────────────────────── */
+
+let PROD = { briefingId: '', setores: [], busca: '' };
+
+function renderLayoutProducao(app) {
+  document.title = 'Pranchas de produção';
+  const cfg = STORE.getCFG();
+  const setores = cfg.setoresProducao || [];
+  const b = PROD.briefingId ? STORE.getOS(PROD.briefingId) : null;
+
+  const candidatos = STORE.getAllOS()
+    .filter(x => x && !x.apagadoEm && !x.avulsa && x.situacao === 'enviado')
+    .filter(x => {
+      const t = norm(PROD.busca);
+      if (!t) return true;
+      return norm((x.cliente || '') + ' ' + (x.osNumero || '') + ' ' +
+        (x.numeroBrief ? padBrief(x.numeroBrief) : '') + ' ' + fmtData(x.dataHora)).includes(t);
+    })
+    .sort((a, z) => String(z.dataHora || '').localeCompare(String(a.dataHora || '')))
+    .slice(0, 40);
+
+  app.innerHTML =
+    htmlTopo('Pranchas de produção') +
+    '<main class="miolo">' +
+    '<a href="#/layout" class="dica-campo" style="display:inline-block; margin-bottom:10px">← modos</a>' +
+
+    '<div class="card"><div class="sub-secao">1 · Escolha o briefing</div>' +
+    '<div class="campo"><input id="pr-busca" type="text" placeholder="Cliente, O.S., Nº do brief ou data" value="' + esc(PROD.busca) + '"></div>' +
+    (b
+      ? '<div class="aviso verde"><b>' + esc(b.cliente) + '</b>' +
+        (b.numeroBrief ? ' · Nº ' + padBrief(b.numeroBrief) : '') +
+        (String(b.osNumero || '').trim() ? ' · O.S. ' + esc(b.osNumero) : ' · sem O.S.') +
+        ' · ' + (b.itens || []).length + ' item(ns)' +
+        ' <button class="botao mini fantasma" id="pr-trocar" style="margin-left:8px">Trocar</button></div>'
+      : (candidatos.length
+        ? '<div class="lista-escolha">' + candidatos.map(x =>
+            '<button class="opcao-briefing" data-brief="' + x.id + '">' +
+            '<b>' + esc(x.cliente || 'Sem nome') + '</b>' +
+            '<span class="dica-campo">' + (x.numeroBrief ? 'Nº ' + padBrief(x.numeroBrief) + ' · ' : '') +
+            (String(x.osNumero || '').trim() ? 'O.S. ' + esc(x.osNumero) : 'sem O.S.') +
+            ' · ' + fmtData(x.dataHora) + '</span></button>').join('') + '</div>'
+        : '<div class="vazio">Nenhum briefing enviado encontrado.</div>')) +
+    '</div>' +
+
+    '<div class="card"><div class="sub-secao">2 · Setores envolvidos</div>' +
+    '<p class="dica-campo" style="margin-bottom:10px">Cada setor marcado vira uma prancha, numerada em sequência.</p>' +
+    '<div class="chips">' +
+    setores.map(s => '<button class="chip ' + (PROD.setores.includes(s) ? 'marcado' : '') + '" data-setor="' + esc(s) + '">' + esc(s) + '</button>').join('') +
+    '</div></div>' +
+
+    '<button class="botao largo" id="pr-gerar"' + (b && PROD.setores.length ? '' : ' disabled') + '>' +
+    '⚙️ Gerar ' + (PROD.setores.length || '') + ' prancha' + (PROD.setores.length === 1 ? '' : 's') + '</button>' +
+    (b && !PROD.setores.length ? '<p class="dica-campo" style="text-align:center; margin-top:8px">Marque pelo menos um setor.</p>' : '') +
+    '</main>';
+
+  ligarTopo();
+  $('#pr-busca').oninput = debounce(e => { PROD.busca = e.target.value; renderApp(); }, 300);
+  $$('[data-brief]').forEach(bt => bt.onclick = () => { PROD.briefingId = bt.dataset.brief; renderApp(); });
+  const tr = $('#pr-trocar'); if (tr) tr.onclick = () => { PROD.briefingId = ''; renderApp(); };
+  $$('[data-setor]').forEach(ch => ch.onclick = () => {
+    const s = ch.dataset.setor;
+    const i = PROD.setores.indexOf(s);
+    if (i >= 0) PROD.setores.splice(i, 1); else PROD.setores.push(s);
+    renderApp();
+  });
+  const g = $('#pr-gerar');
+  if (g) g.onclick = () => gerarLoteProducao(b);
+}
+
+async function gerarLoteProducao(b) {
+  if (!b || !PROD.setores.length) return;
+  toast('Montando as pranchas…');
+  const cfg = STORE.getCFG();
+  const fotoId = fotoPrincipal(b);
+  const imagem = fotoId ? await STORE.pullPhoto(fotoId) : null;
+  const medidas = medidasDoBriefing(b);
+  const total = PROD.setores.length;
+  const itens = PROD.setores.map((setor, i) => montarPrancha(b, {
+    seloServico: setor,
+    setor,
+    tituloServico: setor.toUpperCase(),
+    medidas,
+    imagem, imagemId: fotoId,
+    numero: i + 1, total
+  }));
+  LOTE = { modo: 'producao', briefingId: b.id, itens, cfg };
+  abrirPreviaLote();
+}
+
+/* ── Modo Projeto ──────────────────────────────────────────────────────── */
+
+let PROJ = { briefingId: '', busca: '', cliente: '', contato: '', osNumero: '', imagens: [] };
+
+function renderLayoutProjeto(app) {
+  document.title = 'Prancha de projeto';
+  const b = PROJ.briefingId ? STORE.getOS(PROJ.briefingId) : null;
+  const candidatos = STORE.getAllOS()
+    .filter(x => x && !x.apagadoEm && !x.avulsa && x.situacao === 'enviado')
+    .filter(x => {
+      const t = norm(PROJ.busca);
+      return !t || norm((x.cliente || '') + ' ' + (x.osNumero || '')).includes(t);
+    })
+    .sort((a, z) => String(z.dataHora || '').localeCompare(String(a.dataHora || '')))
+    .slice(0, 25);
+
+  app.innerHTML =
+    htmlTopo('Prancha de projeto') +
+    '<main class="miolo">' +
+    '<a href="#/layout" class="dica-campo" style="display:inline-block; margin-bottom:10px">← modos</a>' +
+
+    '<div class="card"><div class="sub-secao">1 · Arte final (JPG)</div>' +
+    '<p class="dica-campo" style="margin-bottom:10px">Pode soltar vários de uma vez: cada imagem vira uma prancha, numerada sozinha.</p>' +
+    '<button class="botao largo suave" id="pj-add">🖼 Escolher imagens</button>' +
+    '<input type="file" accept="image/*" multiple id="pj-input" hidden>' +
+    (PROJ.imagens.length
+      ? '<div class="grade-galeria" style="margin-top:12px">' + PROJ.imagens.map((im, i) =>
+          '<figure><img src="' + im.base64 + '" alt="Arte ' + (i + 1) + '">' +
+          '<figcaption>' + p2n(i + 1) + '/' + p2n(PROJ.imagens.length) + ' · ' +
+          '<button class="link-remover" data-rem-img="' + i + '">remover</button></figcaption></figure>').join('') + '</div>'
+      : '') +
+    '</div>' +
+
+    '<div class="card"><div class="sub-secao">2 · Cliente</div>' +
+    '<p class="dica-campo" style="margin-bottom:10px">Vincular a um briefing preenche tudo sozinho. Sem briefing, informe o básico.</p>' +
+    '<div class="campo"><input id="pj-busca" type="text" placeholder="Buscar briefing por cliente ou O.S. (opcional)" value="' + esc(PROJ.busca) + '"></div>' +
+    (b
+      ? '<div class="aviso verde"><b>' + esc(b.cliente) + '</b>' +
+        (String(b.osNumero || '').trim() ? ' · O.S. ' + esc(b.osNumero) : ' · sem O.S.') +
+        ' <button class="botao mini fantasma" id="pj-trocar" style="margin-left:8px">Desvincular</button></div>'
+      : (PROJ.busca && candidatos.length
+          ? '<div class="lista-escolha">' + candidatos.map(x =>
+              '<button class="opcao-briefing" data-pjbrief="' + x.id + '"><b>' + esc(x.cliente || 'Sem nome') + '</b>' +
+              '<span class="dica-campo">' + (String(x.osNumero || '').trim() ? 'O.S. ' + esc(x.osNumero) : 'sem O.S.') + ' · ' + fmtData(x.dataHora) + '</span></button>').join('') + '</div>'
+          : '<div class="linha-3">' +
+            '<div class="campo"><label>Cliente</label><input id="pj-cliente" type="text" value="' + esc(PROJ.cliente) + '"></div>' +
+            '<div class="campo"><label>Contato</label><input id="pj-contato" type="text" value="' + esc(PROJ.contato) + '"></div>' +
+            '<div class="campo"><label>O.S. (se tiver)</label><input id="pj-os" type="text" inputmode="numeric" value="' + esc(PROJ.osNumero) + '"></div>' +
+            '</div>')) +
+    '</div>' +
+
+    '<button class="botao largo" id="pj-gerar"' + (PROJ.imagens.length ? '' : ' disabled') + '>' +
+    '⚙️ Montar ' + (PROJ.imagens.length || '') + ' prancha' + (PROJ.imagens.length === 1 ? '' : 's') + '</button>' +
+    '</main>';
+
+  ligarTopo();
+  const inp = $('#pj-input');
+  $('#pj-add').onclick = () => inp.click();
+  inp.onchange = async () => {
+    const arquivos = Array.from(inp.files || []);
+    if (!arquivos.length) return;
+    toast('Preparando ' + arquivos.length + ' imagem(ns)…');
+    for (const f of arquivos) {
+      const base64 = await STORE.compressImage(f);
+      if (base64) PROJ.imagens.push({ base64, nome: f.name });
+    }
+    inp.value = '';
+    renderApp();
+  };
+  $$('[data-rem-img]').forEach(bt => bt.onclick = () => {
+    PROJ.imagens.splice(Number(bt.dataset.remImg), 1);
+    renderApp();
+  });
+  $('#pj-busca').oninput = debounce(e => { PROJ.busca = e.target.value; renderApp(); }, 300);
+  $$('[data-pjbrief]').forEach(bt => bt.onclick = () => { PROJ.briefingId = bt.dataset.pjbrief; renderApp(); });
+  const tr = $('#pj-trocar'); if (tr) tr.onclick = () => { PROJ.briefingId = ''; renderApp(); };
+  ['cliente', 'contato', 'osNumero'].forEach(campo => {
+    const el = $('#pj-' + (campo === 'osNumero' ? 'os' : campo));
+    if (el) el.oninput = () => { PROJ[campo] = el.value; };
+  });
+  $('#pj-gerar').onclick = () => gerarLoteProjeto(b);
+}
+
+function p2n(n) { return String(n).padStart(2, '0'); }
+
+function gerarLoteProjeto(b) {
+  if (!PROJ.imagens.length) return;
+  const cfg = STORE.getCFG();
+  const base = b || { cliente: PROJ.cliente, responsavel: PROJ.contato, osNumero: PROJ.osNumero };
+  const total = PROJ.imagens.length;
+  const itens = PROJ.imagens.map((im, i) => montarPrancha(base, {
+    seloServico: 'Projeto',
+    tituloServico: '',
+    imagem: im.base64,
+    medidas: b ? medidasDoBriefing(b) : '',
+    numero: i + 1, total
+  }));
+  LOTE = { modo: 'projeto', briefingId: b ? b.id : '', itens, cfg };
+  abrirPreviaLote();
+}
+
+/* ── Pré-visualização e edição do lote ─────────────────────────────────── */
+
+function abrirPreviaLote() {
+  if (!LOTE || !LOTE.itens.length) return;
+  const cfg = LOTE.cfg || STORE.getCFG();
+  const tiposServico = cfg.tiposServico || [];
+  const m = abrirModal(
+    '<h3>' + LOTE.itens.length + ' prancha(s) prontas</h3>' +
+    '<p class="dica-campo">Confira e ajuste antes de exportar. O que ficar em branco sai em branco pra preencher à mão.</p>' +
+    '<div id="lote-lista" style="margin-top:12px">' +
+    LOTE.itens.map((p, i) =>
+      '<div class="card-prancha" data-pi="' + i + '">' +
+      '<div class="cabeca-prancha"><b>' + p2n(p.numero) + '/' + p2n(p.total) + '</b>' +
+      '<span class="selo-mini">' + esc(p.seloServico || 'sem selo') + '</span></div>' +
+      '<div class="campo"><label>Título do serviço</label>' +
+      '<input type="text" data-pcampo="tituloServico" data-pi="' + i + '" value="' + esc(p.tituloServico) + '" placeholder="Ex: RETIRADA DE PLACA"></div>' +
+      '<div class="linha-2">' +
+      '<div class="campo"><label>Selo</label><select data-pcampo="seloServico" data-pi="' + i + '">' +
+      '<option value="">Sem selo</option>' +
+      tiposServico.map(t => '<option ' + (p.seloServico === t ? 'selected' : '') + '>' + esc(t) + '</option>').join('') +
+      (p.seloServico && !tiposServico.includes(p.seloServico) ? '<option selected>' + esc(p.seloServico) + '</option>' : '') +
+      '</select></div>' +
+      '<div class="campo"><label>Entrega</label>' +
+      '<input type="text" inputmode="numeric" maxlength="10" placeholder="dd/mm/aaaa" data-pdata="' + i + '" value="' + esc(p.dataEntrega ? isoParaDataBr(p.dataEntrega) : '') + '"></div>' +
+      '</div>' +
+      '<div class="campo"><label>Obs</label><input type="text" data-pcampo="obs" data-pi="' + i + '" value="' + esc(p.obs) + '"></div>' +
+      '<div class="acoes-prancha">' +
+      (p.imagem ? '<img class="thumb-prancha" src="' + p.imagem + '" alt="">' : '<span class="dica-campo">sem imagem</span>') +
+      '<button class="botao mini suave" data-troca-img="' + i + '">Trocar foto</button>' +
+      '<input type="file" accept="image/*" hidden data-input-img="' + i + '">' +
+      '</div></div>'
+    ).join('') +
+    '</div>' +
+    '<div class="acoes-modal">' +
+    '<button class="botao fantasma btn-cancelar">Cancelar</button>' +
+    '<button class="botao suave btn-separados">PDFs separados</button>' +
+    '<button class="botao btn-unico">📄 PDF único</button>' +
+    '</div>'
+  );
+
+  $$('[data-pcampo]', m).forEach(el => {
+    const ev = el.tagName === 'SELECT' ? 'onchange' : 'oninput';
+    el[ev] = () => {
+      LOTE.itens[Number(el.dataset.pi)][el.dataset.pcampo] = el.value;
+      if (el.dataset.pcampo === 'seloServico') {
+        const chip = $('.card-prancha[data-pi="' + el.dataset.pi + '"] .selo-mini', m);
+        if (chip) chip.textContent = el.value || 'sem selo';
+      }
+    };
+  });
+  $$('[data-pdata]', m).forEach(el => el.oninput = () => {
+    el.value = mascaraData(el.value);
+    const iso = dataBrParaISO(el.value, '12:00');
+    LOTE.itens[Number(el.dataset.pdata)].dataEntrega = iso || '';
+  });
+  $$('[data-troca-img]', m).forEach(bt => bt.onclick = () => {
+    const i = bt.dataset.trocaImg;
+    $('[data-input-img="' + i + '"]', m).click();
+  });
+  $$('[data-input-img]', m).forEach(inp => inp.onchange = async () => {
+    const f = inp.files && inp.files[0];
+    if (!f) return;
+    const base64 = await STORE.compressImage(f);
+    if (!base64) { toast('Não consegui ler a imagem', 'erro'); return; }
+    const i = Number(inp.dataset.inputImg);
+    LOTE.itens[i].imagem = base64;
+    LOTE.itens[i].imagemId = null;
+    const card = $('.card-prancha[data-pi="' + i + '"]', m);
+    const img = $('.thumb-prancha', card);
+    if (img) img.src = base64;
+    else card.querySelector('.acoes-prancha').insertAdjacentHTML('afterbegin', '<img class="thumb-prancha" src="' + base64 + '" alt="">');
+  });
+
+  $('.btn-cancelar', m).onclick = () => m.remove();
+  $('.btn-unico', m).onclick = () => { m.remove(); exportarLote(false); };
+  $('.btn-separados', m).onclick = () => { m.remove(); exportarLote(true); };
+}
+
+let _pranchaCarregada = null;
+function ensurePrancha() {
+  if (!_pranchaCarregada) {
+    _pranchaCarregada = ensurePdfLibs().then(() => carregarScript('prancha.js'));
+  }
+  return _pranchaCarregada;
+}
+
+async function exportarLote(separados) {
+  if (!LOTE || !LOTE.itens.length) return;
+  toast('Gerando o PDF…');
+  try {
+    await ensurePrancha();
+    const cfg = LOTE.cfg || STORE.getCFG();
+    const base = arquivoSeguro((LOTE.itens[0] && LOTE.itens[0].cliente) || 'prancha');
+    if (separados) {
+      for (const p of LOTE.itens) {
+        const doc = await PRANCHA.gerarPdf([p], cfg);
+        doc.save('prancha-' + p2n(p.numero) + '-' + arquivoSeguro(p.seloServico || 'layout') + '-' + base + '.pdf');
+        await new Promise(r => setTimeout(r, 350)); // o navegador engasga com downloads em rajada
+      }
+    } else {
+      const doc = await PRANCHA.gerarPdf(LOTE.itens, cfg);
+      doc.save('pranchas-' + base + '.pdf');
+    }
+    await salvarLoteNoBriefing();
+    toast('PDF pronto ✓', 'sucesso');
+  } catch (e) {
+    console.error(e);
+    toast('Não consegui gerar: ' + e.message, 'erro');
+  }
+}
+
+// Guarda a prancha no briefing (ou num registro avulso), com histórico de versões.
+// Só os DADOS são gravados; o PDF é remontado na hora de baixar ou regerar.
+async function salvarLoteNoBriefing() {
+  if (!LOTE) return;
+  const enxuto = p => ({
+    id: p.id, numero: p.numero, total: p.total,
+    seloServico: p.seloServico, setor: p.setor || '', tituloServico: p.tituloServico,
+    medidas: p.medidas, detalhe: p.detalhe || '', obs: p.obs,
+    dataEntrega: p.dataEntrega || '', imagemId: p.imagemId || null,
+    cliente: p.cliente, contato: p.contato, vendedor: p.vendedor, designer: p.designer,
+    osNumero: p.osNumero, endereco: p.endereco, data: p.data,
+    equipe: p.equipe || [], ferramentas: p.ferramentas || [], acessorios: p.acessorios || []
+  });
+
+  // Imagens que ainda não estão no store (modo projeto / trocadas na prévia)
+  for (const p of LOTE.itens) {
+    if (!p.imagemId && p.imagem) {
+      const fileId = 'prancha_' + STORE.uuid().slice(0, 12);
+      const bytes = Math.round(p.imagem.length * 0.75);
+      await STORE.putFoto(fileId, p.imagem, 'image/jpeg');
+      STORE.api({ action: 'putPhoto', fileId, base64: p.imagem, mime: 'image/jpeg' }).catch(() => {});
+      p.imagemId = fileId;
+      p._bytes = bytes;
+    }
+  }
+
+  let alvo = LOTE.briefingId ? STORE.getOS(LOTE.briefingId) : null;
+  if (!alvo) {
+    // Prancha sem briefing: registro próprio, fora da lista de briefings, mas
+    // dentro da mesma nuvem (entra em lixeira, limpeza e armazenamento).
+    const agora = new Date().toISOString();
+    alvo = {
+      id: STORE.uuid(), avulsa: true, situacao: 'enviado', status: '',
+      cliente: LOTE.itens[0].cliente || 'Prancha avulsa',
+      responsavel: LOTE.itens[0].contato || '',
+      osNumero: LOTE.itens[0].osNumero || '',
+      vendedor: '', vendedorUsuario: '', telefone: '', itens: [], croquis: [],
+      dataHora: agora, criadoEm: agora, criadoPor: SESSAO.nome,
+      atualizadoEm: agora, atualizadoPor: SESSAO.nome, pranchas: []
+    };
+    LOTE.briefingId = alvo.id;
+  }
+  alvo.pranchas = alvo.pranchas || [];
+  alvo.pranchas.push({
+    versao: alvo.pranchas.length + 1,
+    modo: LOTE.modo,
+    criadoEm: new Date().toISOString(),
+    criadoPor: SESSAO.nome,
+    itens: LOTE.itens.map(enxuto),
+    bytes: LOTE.itens.reduce((s, p) => s + (p._bytes || 0), 0)
+  });
+  alvo.atualizadoEm = new Date().toISOString();
+  alvo.atualizadoPor = SESSAO.nome;
+  STORE.saveOS(JSON.parse(JSON.stringify(alvo)));
+}
+
+// Regera o PDF de uma versão já salva (busca as imagens pelo id)
+async function regerarVersao(b, versao) {
+  toast('Remontando as pranchas…');
+  try {
+    await ensurePrancha();
+    const cfg = STORE.getCFG();
+    const itens = [];
+    for (const p of versao.itens) {
+      const imagem = p.imagemId ? await STORE.pullPhoto(p.imagemId) : null;
+      itens.push(Object.assign({}, p, { imagem, textoDireitos: cfg.textoDireitos || '' }));
+    }
+    const doc = await PRANCHA.gerarPdf(itens, cfg);
+    doc.save('pranchas-v' + versao.versao + '-' + arquivoSeguro(b.cliente) + '.pdf');
+    toast('PDF pronto ✓', 'sucesso');
+  } catch (e) {
+    console.error(e);
+    toast('Não consegui remontar: ' + e.message, 'erro');
+  }
 }
 
 /* ══════════════════ Modelo do briefing ══════════════════ */
@@ -629,7 +1168,9 @@ function pendencias(b) {
 /* ══════════════════ Lista ══════════════════ */
 
 function visiveisPraSessao() {
-  let lista = STORE.getAllOS().filter(b => b && !b.apagadoEm);
+  // Pranchas avulsas (modo projeto sem briefing) moram no mesmo store, mas não
+  // são briefings: ficam fora desta lista.
+  let lista = STORE.getAllOS().filter(b => b && !b.apagadoEm && !b.avulsa);
   if (SESSAO.papel === 'vendedor') {
     lista = lista.filter(b => b.vendedorUsuario === SESSAO.usuario || b.criadoPor === SESSAO.nome);
   } else if (SESSAO.papel === 'designer') {
@@ -1748,6 +2289,7 @@ function renderDetalhe(app) {
     '<button class="botao mini suave" id="btn-baixar-fotos"' + (liberado ? '' : ' disabled') + '>📥 Baixar todas as fotos (.zip)</button>' +
     // A ficha é o papel que o vendedor leva PRA visita: nunca pode ficar travada
     '<button class="botao mini fantasma" id="btn-ficha-det">🖨 Ficha de visita (PDF)</button>' +
+    (podeUsarLayout() ? '<button class="botao mini suave" id="btn-gerar-prancha"' + (liberado ? '' : ' disabled') + '>🗂 Gerar prancha</button>' : '') +
     (podeGerir || meu ? '<button class="botao mini suave" id="btn-vincular-os">' + (semOS ? '🔗 Vincular O.S.' : '🔗 Trocar O.S.') + '</button>' : '') +
     (SESSAO.papel === 'admin' && !b.apagadoEm ? '<button class="botao mini perigo" id="btn-lixeira">🗑 Mover pra lixeira</button>' : '') +
     '</div>' +
@@ -1822,6 +2364,20 @@ function renderDetalhe(app) {
         ).join('') + '</div></div>'
       : '') +
 
+    // Pranchas geradas (histórico de versões)
+    ((b.pranchas || []).length
+      ? '<div class="card"><div class="sub-secao">Pranchas geradas</div>' +
+        b.pranchas.slice().reverse().map(v =>
+          '<div class="resumo-item" style="display:flex; justify-content:space-between; align-items:center; gap:10px; flex-wrap:wrap">' +
+          '<div><b class="fonte-titulo">Versão ' + v.versao + ' · ' + (v.modo === 'producao' ? 'Produção' : 'Projeto') + '</b>' +
+          '<div class="dica-campo">' + v.itens.length + ' prancha(s) · ' +
+          esc(v.itens.map(p => p.seloServico || 'sem selo').join(', ')) + '<br>' +
+          esc(v.criadoPor) + ' · ' + fmtDataHora(v.criadoEm) + '</div></div>' +
+          '<button class="botao mini suave" data-regerar="' + v.versao + '">📄 Baixar PDF</button>' +
+          '</div>').join('') +
+        '</div>'
+      : '') +
+
     // Observações gerais
     '<div class="card"><div class="sub-secao">Observações gerais</div><dl>' +
     linha('Energia próxima', o.energia === 'sim' ? 'Sim' + (o.energiaOnde ? ' (' + esc(o.energiaOnde) + ')' : '') + (o.voltagem ? ' · ' + esc(o.voltagem) : '') : o.energia === 'nao' ? 'Não' : '') +
@@ -1867,6 +2423,15 @@ function renderDetalhe(app) {
   $('#btn-pdf-brief').onclick = () => exportarPdfBriefing(b);
   $('#btn-ficha-det').onclick = () => exportarFichaVisita(b);
   $('#btn-baixar-fotos').onclick = () => baixarFotosDoBriefing(b);
+  const bp = $('#btn-gerar-prancha');
+  if (bp) bp.onclick = () => {
+    PROD = { briefingId: b.id, setores: [], busca: '' };
+    location.hash = '#/layout/producao';
+  };
+  $$('[data-regerar]').forEach(bt => bt.onclick = () => {
+    const v = (b.pranchas || []).find(x => String(x.versao) === bt.dataset.regerar);
+    if (v) regerarVersao(b, v);
+  });
   $$('[data-pdf-item]').forEach(bt => bt.onclick = () => {
     const item = (b.itens || []).find(i => i.id === bt.dataset.pdfItem);
     if (item) exportarPdfItem(b, item);
@@ -2163,6 +2728,24 @@ function adminConfig(alvo) {
       '<div class="campo"><label>' + esc(s) + '</label>' +
       '<textarea rows="2" data-dica="' + esc(s) + '">' + esc((cfg.dicas || {})[s] || '') + '</textarea></div>'
     ).join('') + '</div>' +
+    '<div class="card"><div class="sub-secao">Contatos da empresa (cabeçalho da prancha)</div>' +
+    '<div class="linha-2">' +
+    [['nome', 'Nome'], ['instagram', 'Instagram'], ['whatsapp', 'WhatsApp'], ['telefone', 'Telefone'], ['email', 'E-mail'], ['endereco', 'Endereço']]
+      .map(([k, r]) => '<div class="campo"><label>' + r + '</label>' +
+        '<input type="text" data-empresa="' + k + '" value="' + esc((cfg.empresa || {})[k] || '') + '"></div>').join('') +
+    '</div>' +
+    '<div class="campo"><label>Texto de direitos autorais</label>' +
+    '<textarea id="cf-direitos" rows="2">' + esc(cfg.textoDireitos || '') + '</textarea></div>' +
+    '</div>' +
+
+    '<div class="card"><div class="sub-secao">Prancha: setores e selos</div>' +
+    '<div class="campo"><label>Setores de produção (um por linha)</label>' +
+    '<textarea rows="5" id="cf-setores">' + esc((cfg.setoresProducao || []).join('\n')) + '</textarea>' +
+    '<div class="dica-campo">Cada setor marcado no gerador vira uma prancha.</div></div>' +
+    '<div class="campo"><label>Tipos de serviço do selo laranja (um por linha)</label>' +
+    '<textarea rows="5" id="cf-servicos">' + esc((cfg.tiposServico || []).join('\n')) + '</textarea></div>' +
+    '</div>' +
+
     '<div class="card"><div class="sub-secao">Fotos obrigatórias por tipo de item</div>' +
     '<p class="dica-campo" style="margin-bottom:12px">Marque o que o vendedor é obrigado a fotografar em cada tipo. Adesivo de parede costuma resolver com uma foto só; letreiro e totem pedem o conjunto. As outras fotos continuam disponíveis como opcionais.</p>' +
     '<div class="tabela-fotos">' +
@@ -2218,6 +2801,14 @@ function adminConfig(alvo) {
       if (cb.checked) porTipo[t].push(cb.dataset.foto);
     });
     if (Object.keys(porTipo).length) cfg2.fotosPorTipo = porTipo;
+    // Prancha: contatos da empresa, setores e selos
+    cfg2.empresa = Object.assign({}, cfg2.empresa || {});
+    $$('[data-empresa]', alvo).forEach(el => { cfg2.empresa[el.dataset.empresa] = el.value.trim(); });
+    cfg2.textoDireitos = $('#cf-direitos').value.trim();
+    const setores = $('#cf-setores').value.split('\n').map(s => s.trim()).filter(Boolean);
+    const servicos = $('#cf-servicos').value.split('\n').map(s => s.trim()).filter(Boolean);
+    if (setores.length) cfg2.setoresProducao = setores;
+    if (servicos.length) cfg2.tiposServico = servicos;
     cfg2.webhookUrl = $('#cf-webhook').value.trim();
     STORE.saveCFG(cfg2, SESSAO.nome);
     toast('Configurações salvas ✓ (sincronizam pra equipe)', 'sucesso');

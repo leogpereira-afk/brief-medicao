@@ -7,6 +7,7 @@ const STORE = (() => {
     OS:         'app_sync_os',
     CFG:        'app_sync_cfg',
     USER:       'app_sync_user',
+    LEMBRADO:   'app_sync_usuario_lembrado',
     INSTALADOR: 'app_sync_instalador',
     FILA:       'app_sync_fila',
     LASTSYNC:   'app_sync_lastsync'
@@ -139,7 +140,24 @@ const STORE = (() => {
     },
     superficies: ['Alvenaria', 'Drywall', 'Madeira', 'Metal', 'Pedra lisa', 'Pedra irregular', 'Vidro', 'Concreto aparente', 'Sinalização/ACM existente', 'Telha', 'Outro'],
     // Webhook (n8n) chamado pelo servidor quando um briefing é enviado pro design
-    webhookUrl: ''
+    webhookUrl: '',
+
+    // ── Prancha (gerador de layout) ────────────────────────────────────────
+    // Contatos da empresa que saem no cabeçalho da prancha (admin edita)
+    empresa: {
+      nome: 'Impresilk Soluções Visuais',
+      instagram: '@impresilk',
+      whatsapp: '(38) 99999-9999',
+      telefone: '(38) 3221-0000',
+      endereco: 'Montes Claros - MG',
+      email: 'contato@impresilk.com.br'
+    },
+    // Setores de produção: cada um marcado vira uma prancha
+    setoresProducao: ['Impressão', 'Recorte', 'Acabamento', 'Serralheria', 'Instalação'],
+    // Tipos de serviço do selo laranja
+    tiposServico: ['Instalação', 'Retirada', 'Manutenção', 'Impressão', 'Recorte', 'Acabamento', 'Serralheria', 'Entrega'],
+    // Texto fixo de direitos autorais no rodapé do cabeçalho
+    textoDireitos: 'Este layout é propriedade da Impresilk Soluções Visuais. Proibida a reprodução total ou parcial sem autorização.'
   };
 
   function getCFG() {
@@ -544,6 +562,9 @@ const STORE = (() => {
   // ── Identidade local ──────────────────────────────────────────────────────
   function getUser()         { return lsGet(K.USER,       null); }
   function setUser(u)        { lsSet(K.USER, u); }
+  // Só o nome de usuário fica lembrado no aparelho; a senha nunca é guardada.
+  function getUsuarioLembrado()  { return lsGet(K.LEMBRADO, '') || ''; }
+  function setUsuarioLembrado(u) { lsSet(K.LEMBRADO, u || ''); }
   function getInstalador()   { return lsGet(K.INSTALADOR, null); }
   function setInstalador(n)  { lsSet(K.INSTALADOR, n); }
   function getLastSync()     { return lsGet(K.LASTSYNC,   null); }
@@ -623,6 +644,7 @@ const STORE = (() => {
     getCFG, saveCFG,
     // Identidade
     getUser, setUser, getInstalador, setInstalador, getLastSync,
+    getUsuarioLembrado, setUsuarioLembrado,
     // Sync
     trySync, pull, pullCFG,
     // Fotos
