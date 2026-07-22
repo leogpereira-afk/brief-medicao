@@ -151,6 +151,19 @@ exports.handler = async (event, context) => {
         return resp(out);
       }
 
+      // ── claimTest: reivindica uma chave fixa com onlyIfNew (teste de atomicidade)
+      case 'claimTest': {
+        const s = blobStore('cfg');
+        const chave = 'claimtest_' + (body.rodada || 'x');
+        const meuId = body.id || Math.random().toString(36).slice(2);
+        let modified = null, erro = null;
+        try {
+          const r = await s.set(chave, meuId, { onlyIfNew: true });
+          modified = r && r.modified;
+        } catch (e) { erro = (e && e.message) || String(e); }
+        return resp({ id: meuId, modified, erro });
+      }
+
       // ── list: retorna os briefings em páginas ───────────────────────────────
       // Paginado para a resposta nunca passar do limite de ~6 MB das Netlify
       // Functions. O cliente percorre as páginas usando "after"/"nextAfter".
