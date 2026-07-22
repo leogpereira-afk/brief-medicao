@@ -189,13 +189,23 @@ const PRANCHA = (() => {
     doc.setDrawColor(...BORDA); doc.setLineWidth(0.8);
     doc.rect(x, y, w, h);
   }
-  // "Rótulo: valor" dentro de uma caixa
+  // "Rótulo: valor" dentro de uma caixa. O valor NUNCA é cortado no meio: encolhe
+  // até caber (nome de cliente e endereço cortados mandavam o instalador pro
+  // lugar errado e a produção pro material errado).
   function rotuloValor(doc, rotulo, valor, x, y, larguraCaixa, tamRotulo, tamValor) {
-    doc.setFont('Poppins', 'normal'); doc.setFontSize(tamRotulo || 10); doc.setTextColor(...PRETO);
+    const tam = tamRotulo || 10;
+    doc.setFont('Poppins', 'normal'); doc.setFontSize(tam); doc.setTextColor(...PRETO);
     doc.text(rotulo, x, y);
     const xv = x + doc.getTextWidth(rotulo) + 6;
-    doc.setFontSize(tamValor || tamRotulo || 10); doc.setTextColor(...CINZA_TXT);
-    doc.text(cortar(doc, valor, Math.max(10, larguraCaixa - (xv - x) - 6)), xv, y);
+    const disp = Math.max(10, larguraCaixa - (xv - x) - 6);
+    const txt = String(valor == null ? '' : valor);
+    if (!txt) return;
+    let fs = tamValor || tam;
+    doc.setFontSize(fs);
+    while (doc.getTextWidth(txt) > disp && fs > 5.5) { fs -= 0.3; doc.setFontSize(fs); }
+    doc.setTextColor(...CINZA_TXT);
+    // Se nem no menor corpo couber, aí sim reduz (caso extremo)
+    doc.text(doc.getTextWidth(txt) > disp ? (doc.splitTextToSize(txt, disp)[0] || '') : txt, xv, y);
   }
 
   // ── Cabeçalho ─────────────────────────────────────────────────────────────
@@ -486,8 +496,18 @@ const PRANCHA = (() => {
       doc.text(linhas.slice(0, 2), xArte, yCorpo + 22);
     }
     if (p.medidas) {
-      doc.setFont('Poppins', 'normal'); doc.setFontSize(9); doc.setTextColor(...CINZA_TXT);
-      doc.text(doc.splitTextToSize(String(p.medidas), wArte).slice(0, 3), xArte, yFimCorpo - 26);
+      // Medida cortada faz a produção cortar material a menos: encolhe a fonte
+      // até TODAS as linhas caberem, em vez de descartar as que sobram.
+      doc.setFont('Poppins', 'normal'); doc.setTextColor(...CINZA_TXT);
+      const alturaDisp = 96;
+      let fs = 9;
+      doc.setFontSize(fs);
+      let linhas = doc.splitTextToSize(String(p.medidas), wArte);
+      while (linhas.length * (fs + 2.4) > alturaDisp && fs > 5) {
+        fs -= 0.4; doc.setFontSize(fs);
+        linhas = doc.splitTextToSize(String(p.medidas), wArte);
+      }
+      doc.text(linhas, xArte, yFimCorpo - 8 - linhas.length * (fs + 2.4));
     }
 
     // Carimbos são opcionais: só saem quando o designer marca na prévia

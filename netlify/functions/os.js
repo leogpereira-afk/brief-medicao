@@ -184,7 +184,8 @@ exports.handler = async (event, context) => {
         if (existing && existing.numeroBrief && !toSave.numeroBrief) {
           toSave.numeroBrief = existing.numeroBrief;
         }
-        if (!toSave.numeroBrief) {
+        // Registro avulso (prancha sem briefing) não é briefing: não gasta número.
+        if (!toSave.numeroBrief && !toSave.avulsa) {
           toSave.numeroBrief = await proximoNumeroBrief(store);
         }
 
@@ -194,7 +195,9 @@ exports.handler = async (event, context) => {
         // em caso de falha de log/webhook.
         const quem = toSave.atualizadoPor || 'app';
         const base = { briefingId: toSave.id, numero: toSave.numeroBrief || null, cliente: toSave.cliente || '' };
-        const foiEnviado = toSave.situacao === 'enviado' && (!existing || existing.situacao !== 'enviado');
+        // Avulso nunca conta como briefing enviado (não avisa o designer à toa)
+        const foiEnviado = !toSave.avulsa && toSave.situacao === 'enviado' &&
+          (!existing || existing.situacao !== 'enviado');
         if (!existing) {
           await registrarLog({ quem, acao: 'criou o briefing', ...base });
         } else if (toSave.apagadoEm && !existing.apagadoEm) {

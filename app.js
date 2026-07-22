@@ -633,6 +633,9 @@ function fotoPrincipal(b) {
 function renderLayout(app) {
   if (!podeUsarLayout()) { toast('O gerador de layout é da área do designer', 'erro'); location.hash = '#/lista'; return; }
   const modo = ROTA.modo;
+  // Sair de um modo encerra o rascunho dele (evita misturar dois trabalhos)
+  if (modo !== 'projeto') PROJ._aberto = false;
+  if (modo !== 'producao') PROD._aberto = false;
   if (modo === 'producao') return renderLayoutProducao(app);
   if (modo === 'projeto') return renderLayoutProjeto(app);
   return renderLayoutInicio(app);
@@ -662,6 +665,7 @@ let PROD = { briefingId: '', setores: [], busca: '' };
 
 function renderLayoutProducao(app) {
   document.title = 'Pranchas de produção';
+  if (!PROD._aberto) PROD = Object.assign({ briefingId: '', setores: [], busca: '' }, PROD.briefingId ? { briefingId: PROD.briefingId } : {}, { _aberto: true });
   const cfg = STORE.getCFG();
   const setores = cfg.setoresProducao || [];
   const b = PROD.briefingId ? STORE.getOS(PROD.briefingId) : null;
@@ -751,6 +755,9 @@ let PROJ = { briefingId: '', busca: '', cliente: '', contato: '', osNumero: '', 
 
 function renderLayoutProjeto(app) {
   document.title = 'Prancha de projeto';
+  // Entrar na tela vindo de fora zera o rascunho anterior: as artes do cliente
+  // passado NÃO podem entrar no lote do próximo (PDF sairia com a arte errada).
+  if (!PROJ._aberto) PROJ = { briefingId: '', busca: '', cliente: '', contato: '', osNumero: '', imagens: [], _aberto: true };
   const b = PROJ.briefingId ? STORE.getOS(PROJ.briefingId) : null;
   const candidatos = STORE.getAllOS()
     .filter(x => x && !x.apagadoEm && !x.avulsa && x.situacao === 'enviado')
@@ -943,32 +950,45 @@ function ensurePrancha() {
 
 async function exportarLote(separados) {
   if (!LOTE || !LOTE.itens.length) return;
+  // Congela o lote agora: a exportação demora (downloads em fila) e o designer
+  // pode montar outro lote no meio. Sem esta cópia, o segundo lote era gravado
+  // no lugar do primeiro.
+  const lote = LOTE;
   toast('Gerando o PDF…');
   try {
     await ensurePrancha();
-    const cfg = LOTE.cfg || STORE.getCFG();
-    const base = arquivoSeguro((LOTE.itens[0] && LOTE.itens[0].cliente) || 'prancha');
+    const cfg = lote.cfg || STORE.getCFG();
+    const base = arquivoSeguro((lote.itens[0] && lote.itens[0].cliente) || 'prancha');
     if (separados) {
-      for (const p of LOTE.itens) {
+      for (const p of lote.itens) {
         const doc = await PRANCHA.gerarPdf([p], cfg);
         doc.save('prancha-' + p2n(p.numero) + '-' + arquivoSeguro(p.seloServico || 'layout') + '-' + base + '.pdf');
         await new Promise(r => setTimeout(r, 350)); // o navegador engasga com downloads em rajada
       }
     } else {
-      const doc = await PRANCHA.gerarPdf(LOTE.itens, cfg);
+      const doc = await PRANCHA.gerarPdf(lote.itens, cfg);
       doc.save('pranchas-' + base + '.pdf');
     }
-    await salvarLoteNoBriefing();
     toast('PDF pronto ✓', 'sucesso');
   } catch (e) {
     console.error(e);
-    toast('Não consegui gerar: ' + e.message, 'erro');
+    toast('Não consegui gerar o PDF: ' + e.message, 'erro');
+    return;
+  }
+  // Guardar no histórico é uma etapa separada: se ela falhar, o PDF já foi
+  // baixado e o usuário precisa saber disso, não que "não conseguiu gerar".
+  try {
+    await salvarLoteNoBriefing(lote);
+  } catch (e) {
+    console.error(e);
+    toast('PDF baixado, mas não consegui guardar no histórico do briefing', 'erro');
   }
 }
 
 // Guarda a prancha no briefing (ou num registro avulso), com histórico de versões.
 // Só os DADOS são gravados; o PDF é remontado na hora de baixar ou regerar.
-async function salvarLoteNoBriefing() {
+async function salvarLoteNoBriefing(loteRecebido) {
+  const LOTE = loteRecebido || window.LOTE;
   if (!LOTE) return;
   const enxuto = p => ({
     id: p.id, numero: p.numero, total: p.total,
@@ -981,15 +1001,13 @@ async function salvarLoteNoBriefing() {
     equipe: p.equipe || [], ferramentas: p.ferramentas || [], acessorios: p.acessorios || []
   });
 
-  // Imagens que ainda não estão no store (modo projeto / trocadas na prévia)
+  // Imagens que ainda não estão no store (modo projeto / trocadas na prévia).
+  // Passa pela fila offline: sem isso, upload que falhava sumia e a versão
+  // salva ficava apontando pra uma imagem que nunca existiu no servidor.
   for (const p of LOTE.itens) {
     if (!p.imagemId && p.imagem) {
-      const fileId = 'prancha_' + STORE.uuid().slice(0, 12);
-      const bytes = Math.round(p.imagem.length * 0.75);
-      await STORE.putFoto(fileId, p.imagem, 'image/jpeg');
-      STORE.api({ action: 'putPhoto', fileId, base64: p.imagem, mime: 'image/jpeg' }).catch(() => {});
-      p.imagemId = fileId;
-      p._bytes = bytes;
+      p.imagemId = await STORE.salvarFotoBase64(p.imagem, 'image/jpeg', 'prancha_' + STORE.uuid().slice(0, 12));
+      p._bytes = Math.round(p.imagem.length * 0.75);
     }
   }
 
@@ -998,8 +1016,10 @@ async function salvarLoteNoBriefing() {
     // Prancha sem briefing: registro próprio, fora da lista de briefings, mas
     // dentro da mesma nuvem (entra em lixeira, limpeza e armazenamento).
     const agora = new Date().toISOString();
+    // situacao 'prancha' (não 'enviado'): registro avulso não é briefing, então
+    // não pode consumir número de brief nem disparar o webhook de briefing novo.
     alvo = {
-      id: STORE.uuid(), avulsa: true, situacao: 'enviado', status: '',
+      id: STORE.uuid(), avulsa: true, situacao: 'prancha', status: '',
       cliente: LOTE.itens[0].cliente || 'Prancha avulsa',
       responsavel: LOTE.itens[0].contato || '',
       osNumero: LOTE.itens[0].osNumero || '',
@@ -1120,7 +1140,7 @@ function faltaCliente(b) {
 }
 
 function criarNovo() {
-  if (!podeCriar()) { location.hash = '#/'; return; }
+  if (!podeCriar()) { location.hash = '#/lista'; return; }
   const b = novoBriefing();
   STORE.saveOS(JSON.parse(JSON.stringify(b)));
   location.hash = '#/editar/' + b.id;
@@ -1319,7 +1339,7 @@ const ETAPAS_DEF = [
 
 function renderEditor(app) {
   const b = STORE.getOS(ROTA.id);
-  if (!b) { toast('Briefing não encontrado neste aparelho', 'erro'); location.hash = '#/'; return; }
+  if (!b) { toast('Briefing não encontrado neste aparelho', 'erro'); location.hash = '#/lista'; return; }
   if (b.situacao === 'enviado' && SESSAO.papel !== 'admin') { location.hash = '#/b/' + b.id; return; }
   // Troca de briefing: estado de tela do anterior não vale mais
   if (!BRIEF || BRIEF.id !== b.id) { ITENS_RECOLHIDOS.clear(); OS_ITENS_DESMARCADOS.clear(); }
@@ -2007,7 +2027,7 @@ function ligarEditor(cfg) {
       BRIEF.apagadoPor = SESSAO.nome;
       salvarRascunho(true);
       BRIEF = null;
-      location.hash = '#/';
+      location.hash = '#/lista';
     }, true);
 
   // Manuais contextuais
@@ -2263,7 +2283,7 @@ function enviarBriefing() {
 
 function renderDetalhe(app) {
   const b = STORE.getOS(ROTA.id);
-  if (!b) { toast('Briefing não encontrado neste aparelho. Sincronize e tente de novo.', 'erro'); location.hash = '#/'; return; }
+  if (!b) { toast('Briefing não encontrado neste aparelho. Sincronize e tente de novo.', 'erro'); location.hash = '#/lista'; return; }
   document.title = (b.cliente || 'Briefing') + ' · Brief de Medição';
   const podeGerir = SESSAO.papel === 'designer' || SESSAO.papel === 'admin';
   const meu = b.vendedorUsuario === SESSAO.usuario;
@@ -2278,7 +2298,7 @@ function renderDetalhe(app) {
   app.innerHTML =
     htmlTopo((b.numeroBrief ? 'Nº ' + padBrief(b.numeroBrief) + ' · ' : '') + (b.cliente || 'Briefing')) +
     '<main class="miolo">' +
-    '<div class="titulo-pagina"><a href="#/" style="text-decoration:none">←</a> ' + esc(b.cliente || 'Briefing') +
+    '<div class="titulo-pagina"><a href="#/lista" style="text-decoration:none">←</a> ' + esc(b.cliente || 'Briefing') +
     '<span class="badges">' +
     (b.numeroBrief ? '<span class="badge neutro">Nº ' + padBrief(b.numeroBrief) + '</span>' : '') +
     (b.situacao !== 'enviado' ? '<span class="badge rascunho">RASCUNHO</span>' : badgeStatus(b.status)) +
@@ -2470,7 +2490,7 @@ function renderDetalhe(app) {
       b.atualizadoPor = SESSAO.nome;
       STORE.saveOS(JSON.parse(JSON.stringify(b)));
       toast('Movido pra lixeira');
-      location.hash = '#/';
+      location.hash = '#/lista';
     }, true);
 }
 
@@ -2530,7 +2550,7 @@ const ABAS_ADMIN = [
 ];
 
 function renderAdmin(app) {
-  if (SESSAO.papel !== 'admin') { location.hash = '#/'; return; }
+  if (SESSAO.papel !== 'admin') { location.hash = '#/lista'; return; }
   document.title = 'Painel de controle · Brief de Medição';
   const aba = ROTA.aba || 'usuarios';
   app.innerHTML =

@@ -536,6 +536,25 @@ const STORE = (() => {
     return fileId;
   }
 
+  // Guarda uma imagem que JÁ está em base64 (arte da prancha, foto trocada) com
+  // a mesma garantia da foto do briefing: grava local e, se o envio falhar,
+  // entra na fila offline em vez de se perder.
+  async function salvarFotoBase64(base64, mime, idSugerido) {
+    if (!base64) return null;
+    const fileId = idSugerido || ('foto_' + Date.now() + '_' + Math.random().toString(36).slice(2, 8));
+    const tipo = mime || 'image/jpeg';
+    await putFoto(fileId, base64, tipo);
+    if (navigator.onLine) {
+      try {
+        const res = await api({ action: 'putPhoto', base64, mime: tipo, fileId });
+        if (res && res.fileId) return fileId;
+      } catch {}
+    }
+    _enqueue({ action: 'putPhoto', mime: tipo, fileId });
+    trySync();
+    return fileId;
+  }
+
   // Remove a foto local E do servidor (enfileira deletePhoto na fila de sync).
   // delFoto sozinho só apagava do IndexedDB — o blob ficava para sempre no
   // servidor e nos outros aparelhos.
@@ -651,7 +670,7 @@ const STORE = (() => {
     // Sync
     trySync, pull, pullCFG,
     // Fotos
-    pushPhoto, pullPhoto, putFoto, getFoto, delFoto, delFotoSync, compressImage,
+    pushPhoto, pullPhoto, putFoto, getFoto, delFoto, delFotoSync, compressImage, salvarFotoBase64,
     // Eventos
     onSync, onConflict, on,
     // Conflito manual
