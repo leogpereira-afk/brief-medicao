@@ -494,7 +494,9 @@ const STORE = (() => {
       _notifySync(q.length ? 'pending' : 'ok', q.length);
       return { updated: changed };
     } catch {
-      _notifySync('offline', getQueue().length);
+      // Falhou o pull: se o aparelho ESTÁ na internet, quem caiu foi o servidor.
+      // Dizer "Offline" mandava o vendedor procurar sinal que já existia.
+      _notifySync(navigator.onLine ? 'servidor' : 'offline', getQueue().length);
     }
   }
 

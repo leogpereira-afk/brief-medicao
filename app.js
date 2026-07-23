@@ -413,6 +413,13 @@ window.addEventListener('hashchange', () => { lerRota(); renderApp(); });
 
 async function boot() {
   if ('serviceWorker' in navigator) { try { navigator.serviceWorker.register('sw.js'); } catch {} }
+  // Já logado neste aparelho: vai direto pra área do perfil. Antes, toda
+  // abertura caía em "Escolha por onde você entra" e exigia mais um toque --
+  // e tocar na porta errada dava aviso vermelho e um login inútil.
+  if (SESSAO && (location.hash === '' || location.hash === '#/' || location.hash === '#/inicio')) {
+    const porPapel = { vendedor: '#/lista', designer: '#/lista', admin: '#/lista' };
+    location.hash = porPapel[SESSAO.papel] || '#/lista';
+  }
   lerRota();
   renderApp();
   await STORE.pullCFG();
@@ -485,7 +492,10 @@ function podeCriar() { return SESSAO && (SESSAO.papel === 'vendedor' || SESSAO.p
 function rotuloSync(status, pendentes) {
   if (status === 'ok') return 'Sincronizado';
   if (status === 'pending') return (pendentes || 0) + ' pendente(s)';
-  return 'Offline';
+  // "Servidor fora" ≠ "Offline": o celular tem internet, quem não respondeu foi
+  // o sistema. Mandar procurar sinal que já existe só gera ligação pro escritório.
+  if (status === 'servidor') return 'Servidor fora';
+  return 'Sem internet';
 }
 
 function htmlTopo(tituloTela) {
@@ -594,11 +604,45 @@ function abrirMenu() {
 }
 
 function sairDaConta() {
-  confirmar('Sair da conta', 'Os dados deste aparelho continuam salvos e sincronizam quando você entrar de novo.', 'Sair', () => {
-    STORE.setUser(null);
-    SESSAO = null;
+  const pendentes = (STORE.getQueue() || []).length;
+  const m = abrirModal(
+    '<h3>Sair da conta</h3>' +
+    '<p>Os briefings deste aparelho continuam salvos e sincronizam quando você entrar de novo.</p>' +
+    (pendentes ? '<div class="aviso amarelo">Atenção: ' + pendentes + ' item(ns) ainda não subiram. ' +
+      'Se limpar o aparelho agora, esse trabalho se perde.</div>' : '') +
+    '<p class="dica-campo" style="margin-top:10px">Vai devolver ou emprestar este celular? Use <b>Sair e limpar</b>: apaga os briefings e a senha guardada aqui.</p>' +
+    '<div class="acoes-modal">' +
+    '<button class="botao fantasma btn-cancelar">Cancelar</button>' +
+    '<button class="botao perigo btn-limpar">Sair e limpar</button>' +
+    '<button class="botao btn-sair">Sair</button></div>'
+  );
+  $('.btn-cancelar', m).onclick = () => m.remove();
+  $('.btn-sair', m).onclick = () => {
+    m.remove();
+    STORE.setUser(null); SESSAO = null;
     location.hash = '#/login';
-  });
+  };
+  // Limpa de verdade: sem isto, "Sair" deixava briefings, fotos e o usuário
+  // lembrado no aparelho -- quem pegasse o celular via tudo.
+  $('.btn-limpar', m).onclick = () => {
+    m.remove();
+    confirmar('Apagar tudo deste aparelho?',
+      'Vai apagar os briefings, as fotos e a senha guardados <b>neste celular</b>' +
+      (pendentes ? ', inclusive <b>' + pendentes + ' item(ns) que ainda não subiram</b>' : '') +
+      '. O que já sincronizou continua na nuvem. Não dá pra desfazer.',
+      'Apagar e sair', async () => {
+        try {
+          Object.keys(localStorage).filter(k => k.indexOf('app_sync') === 0).forEach(k => localStorage.removeItem(k));
+          if (window.indexedDB && indexedDB.databases) {
+            const bancos = await indexedDB.databases().catch(() => []);
+            bancos.forEach(db => { if (db.name && /foto|brief/i.test(db.name)) indexedDB.deleteDatabase(db.name); });
+          }
+        } catch (e) { console.warn('limpeza parcial:', e); }
+        SESSAO = null;
+        location.hash = '#/login';
+        location.reload();
+      }, true);
+  };
 }
 
 function renderApp() {
@@ -704,6 +748,14 @@ function renderLogin(app) {
     const senha = $('#lg-senha').value;
     let cfg = STORE.getCFG();
     if (!(cfg.usuarios || []).length && navigator.onLine) { await STORE.pullCFG(); cfg = STORE.getCFG(); }
+    // Sem lista de usuários no aparelho, o problema NÃO é a senha: é que este
+    // celular nunca baixou a equipe. Dizer "senha incorreta" fazia o vendedor
+    // na rua achar que a conta tinha sido cancelada.
+    if (!(cfg.usuarios || []).length) {
+      $('#lg-erro').innerHTML = '<div class="aviso vermelho">Este aparelho ainda não baixou a lista da equipe. ' +
+        'Conecte na internet uma vez e entre de novo — depois disso funciona offline.</div>';
+      return;
+    }
     const u = (cfg.usuarios || []).find(x => norm(x.usuario) === norm(usuario));
     if (!u || String(u.senha) !== senha) {
       $('#lg-erro').innerHTML = '<div class="aviso vermelho">Usuário ou senha incorretos.</div>';
@@ -2929,8 +2981,10 @@ function abrirConcluirVisita() {
   const faltando = BRIEF.itens.filter(i => !itemCompleto(i));
   const m = abrirModal(
     '<h3>Concluir a visita</h3>' +
+    // Não diz mais "as 3 fotos": cada tipo de item exige uma quantidade
+    // diferente, e o vendedor voltava pra rua atrás de foto que ninguém pediu.
     (faltando.length
-      ? '<div class="aviso amarelo">Atenção: ' + faltando.length + ' item(ns) ainda sem medida ou sem as 3 fotos. ' +
+      ? '<div class="aviso amarelo">Atenção: ' + faltando.length + ' item(ns) ainda sem medida ou sem as fotos exigidas. ' +
         'Dá pra concluir assim, mas o envio pro design só libera quando estiverem completos.</div>'
       : '') +
     '<p class="dica-campo">A data e a hora são marcadas automaticamente agora: <b>' +
@@ -3204,6 +3258,7 @@ function renderDetalhe(app) {
           esc(v.itens.map(p => p.seloServico || 'sem selo').join(', ')) + '<br>' +
           esc(v.criadoPor) + ' · ' + fmtDataHora(v.criadoEm) + '</div></div>' +
           '<button class="botao mini suave" data-regerar="' + v.versao + '">📄 Baixar PDF</button>' +
+          (podeUsarLayout() ? '<button class="botao mini fantasma" data-corrigir="' + v.versao + '">✏️ Corrigir e gerar nova versão</button>' : '') +
           '</div>').join('') +
         '</div>'
       : '') +
@@ -3280,6 +3335,24 @@ function renderDetalhe(app) {
   $$('[data-regerar]').forEach(bt => bt.onclick = () => {
     const v = (b.pranchas || []).find(x => String(x.versao) === bt.dataset.regerar);
     if (v) regerarVersao(b, v);
+  });
+  // Corrigir um erro bobo (data trocada, typo) sem remontar o lote e remarcar
+  // a ficha inteira: recarrega a versão na prévia e gera uma nova a partir dela.
+  $$('[data-corrigir]').forEach(bt => bt.onclick = async () => {
+    const v = (b.pranchas || []).find(x => String(x.versao) === bt.dataset.corrigir);
+    if (!v) return;
+    toast('Abrindo a versão pra corrigir…');
+    try {
+      await ensureModelos();
+      const cfg = STORE.getCFG();
+      const itens = [];
+      for (const p of v.itens) {
+        const imagem = p.imagemId ? await STORE.pullPhoto(p.imagemId) : null;
+        itens.push(Object.assign({}, p, { id: STORE.uuid(), imagem, textoDireitos: cfg.textoDireitos || '' }));
+      }
+      LOTE = { modo: v.modo || 'producao', briefingId: b.avulsa ? '' : b.id, itens, cfg };
+      abrirPreviaLote();
+    } catch (e) { toast('Não consegui abrir a versão: ' + e.message, 'erro'); }
   });
   $$('[data-pdf-item]').forEach(bt => bt.onclick = () => {
     const item = (b.itens || []).find(i => i.id === bt.dataset.pdfItem);
@@ -3452,13 +3525,25 @@ function adminUsuarios(alvo) {
       '<div class="campo"><label>Usuário (login)</label><input id="u-usuario" autocapitalize="none" value="' + esc(u ? u.usuario : '') + '"' + (u ? ' disabled' : '') + '></div>' +
       '<div class="campo"><label>Perfil</label><select id="u-papel">' +
       ['vendedor', 'designer', 'admin'].map(p => '<option ' + (u && u.papel === p ? 'selected' : '') + '>' + p + '</option>').join('') + '</select></div>' +
-      '<div class="campo"><label>' + (u ? 'Nova senha (deixe em branco pra manter)' : 'Senha') + '</label><input id="u-senha" type="text" autocomplete="off"></div>' +
+      // Senha mascarada, com botão pra mostrar. Antes saía em texto puro na
+      // tela do admin -- quem passasse atrás lia a senha da equipe inteira.
+      '<div class="campo"><label>' + (u ? 'Nova senha (deixe em branco pra manter)' : 'Senha') + '</label>' +
+      '<div style="display:flex; gap:8px">' +
+      '<input id="u-senha" type="password" autocomplete="new-password" style="flex:1">' +
+      '<button type="button" class="botao mini fantasma" id="u-ver-senha">👁 Mostrar</button></div></div>' +
       (u ? '<div class="campo"><label class="chip ' + (u.ativo !== false ? 'marcado' : '') + '" id="u-ativo">Usuário ativo</label></div>' : '') +
       '<div class="acoes-modal"><button class="botao fantasma btn-cancelar">Cancelar</button><button class="botao btn-salvar">Salvar</button></div>'
     );
     let ativo = !u || u.ativo !== false;
     const chipAtivo = $('#u-ativo', m);
     if (chipAtivo) chipAtivo.onclick = () => { ativo = !ativo; chipAtivo.classList.toggle('marcado', ativo); };
+    const verSenha = $('#u-ver-senha', m);
+    if (verSenha) verSenha.onclick = () => {
+      const campo = $('#u-senha', m);
+      const escondida = campo.type === 'password';
+      campo.type = escondida ? 'text' : 'password';
+      verSenha.textContent = escondida ? '🙈 Esconder' : '👁 Mostrar';
+    };
     $('.btn-cancelar', m).onclick = () => m.remove();
     $('.btn-salvar', m).onclick = () => {
       const nome = $('#u-nome', m).value.trim();
@@ -3601,10 +3686,10 @@ async function adminArmazenamento(alvo) {
   const totalGeral = d.banco.bytes + d.fotos.bytes;
   const maxMes = Math.max(1, ...d.porMes.map(m => m.bytes));
   alvo.innerHTML =
-    '<div class="card"><div class="sub-secao">Total armazenado na nuvem (Netlify Blobs)</div>' +
+    '<div class="card"><div class="sub-secao">Espaço usado na nuvem</div>' +
     '<div class="cards-numeros">' +
     '<div class="numero-grande"><div class="valor">' + fmtBytes(totalGeral) + '</div><div class="nome">Total geral</div></div>' +
-    '<div class="numero-grande"><div class="valor">' + fmtBytes(d.banco.bytes) + '</div><div class="nome">Banco (' + d.banco.registros + ' briefings)</div></div>' +
+    '<div class="numero-grande"><div class="valor">' + fmtBytes(d.banco.bytes) + '</div><div class="nome">Dados dos ' + d.banco.registros + ' briefings</div></div>' +
     '<div class="numero-grande"><div class="valor">' + fmtBytes(d.fotos.bytes) + '</div><div class="nome">Fotos (' + d.fotos.quantidade + ')</div></div>' +
     '<div class="numero-grande"><div class="valor">' + d.lixeira + '</div><div class="nome">Na lixeira</div></div>' +
     '</div>' +
@@ -3677,9 +3762,9 @@ function adminConfig(alvo) {
     '<div class="campo"><label>Superfícies (uma por linha)</label>' +
     '<textarea rows="6" id="cf-superficies">' + esc((cfg.superficies || []).join('\n')) + '</textarea></div>' +
     '</div>' +
-    '<div class="card"><div class="sub-secao">Webhook de notificação (n8n)</div>' +
-    '<p class="dica-campo" style="margin-bottom:8px">Quando um briefing é enviado pro design, o servidor chama esta URL na hora. Cole aqui a URL do webhook do n8n.</p>' +
-    '<div class="campo"><label>URL do webhook</label><input id="cf-webhook" type="text" placeholder="https://…" value="' + esc(cfg.webhookUrl || '') + '"></div>' +
+    '<div class="card"><div class="sub-secao">Avisar o time quando chega um briefing</div>' +
+    '<p class="dica-campo" style="margin-bottom:8px">Assim que um vendedor envia um briefing pro design, o sistema dispara um aviso automático (WhatsApp, e-mail, Telegram — o que estiver montado no n8n). Cole aqui o endereço que o n8n forneceu. Em branco = ninguém é avisado.</p>' +
+    '<div class="campo"><label>Endereço do aviso automático</label><input id="cf-webhook" type="text" placeholder="https://…" value="' + esc(cfg.webhookUrl || '') + '"></div>' +
     '<button class="botao mini suave" id="btn-testar-webhook">Disparar teste</button>' +
     '<span id="webhook-resultado" class="dica-campo" style="margin-left:8px"></span>' +
     '</div>' +
@@ -3771,20 +3856,23 @@ async function adminIntegracao(alvo) {
     '<div class="card"><div class="sub-secao">Busca de O.S.</div>' +
     (st
       ? '<dl>' +
-        '<div class="dupla-dado"><dt>Mubisys direto</dt><dd>' + (st.mubisysConfigurado ? '<span class="badge status-concluido">configurado</span>' : '<span class="badge rascunho">não configurado</span>') + '</dd></div>' +
-        '<div class="dupla-dado"><dt>Fallback pelo PCP</dt><dd>' + (st.pcpConfigurado ? '<span class="badge status-concluido">ativo</span>' : '<span class="badge rascunho">inativo</span>') + '</dd></div>' +
+        // Nomes pelo EFEITO, não pela tecnologia: o dono precisa saber o que
+        // liga e desliga, não o que é "fallback" ou "public key".
+        '<div class="dupla-dado"><dt>Busca direta no Mubisys (na hora)</dt><dd>' + (st.mubisysConfigurado ? '<span class="badge status-concluido">ligada</span>' : '<span class="badge rascunho">desligada</span>') + '</dd></div>' +
+        '<div class="dupla-dado"><dt>Busca pelo PCP (reserva)</dt><dd>' + (st.pcpConfigurado ? '<span class="badge status-concluido">ligada</span>' : '<span class="badge rascunho">desligada</span>') + '</dd></div>' +
         (st.tokenMascarado ? '<div class="dupla-dado"><dt>Token Mubisys</dt><dd>' + esc(st.tokenMascarado) + '</dd></div>' : '') +
         '</dl>' +
-        '<p class="dica-campo" style="margin-top:8px">Com o fallback do PCP ativo a busca já funciona hoje. Cadastrar o Mubisys direto deixa a busca em tempo real, sem esperar a importação de hora em hora do PCP.</p>'
+        '<p class="dica-campo" style="margin-top:8px">Com a busca pelo PCP ligada, o vendedor já encontra a O.S. hoje — só que com os dados da última importação (de hora em hora). Ligar a busca direta no Mubisys traz a O.S. no estado do momento.</p>'
       : '<div class="aviso vermelho">Sem conexão com o servidor agora.</div>') +
     '</div>' +
     // O formulário de credenciais SÓ aparece quando o status carregou. Sem
     // conexão, mostrá-lo em branco e salvável apagava a chave que estava lá.
     (st
       ? '<div class="card"><div class="sub-secao">Credenciais do Mubisys (opcional)</div>' +
-        '<div class="campo"><label>Public key</label><input id="mb-public" value="' + esc(st.publicKey || '') + '"></div>' +
-        '<div class="campo"><label>Access token (deixe em branco pra manter o atual)</label><input id="mb-token" type="text" autocomplete="off"></div>' +
-        '<div class="campo"><label>Base da API</label><input id="mb-base" value="' + esc(st.base || 'https://api.mubisys.com/api') + '"></div>' +
+        '<p class="dica-campo" style="margin-bottom:10px">Estes três dados vêm do suporte do Mubisys. Se não tiver, deixe como está — a busca pelo PCP continua funcionando.</p>' +
+        '<div class="campo"><label>Identificação da empresa (public key)</label><input id="mb-public" value="' + esc(st.publicKey || '') + '"></div>' +
+        '<div class="campo"><label>Senha de acesso (deixe em branco pra manter a atual)</label><input id="mb-token" type="password" autocomplete="off"></div>' +
+        '<div class="campo"><label>Endereço do sistema Mubisys</label><input id="mb-base" value="' + esc(st.base || 'https://api.mubisys.com/api') + '"></div>' +
         '<button class="botao" id="btn-salvar-mubisys">Salvar credenciais</button>' +
         '<span id="mb-resultado" class="dica-campo" style="margin-left:8px"></span></div>'
       : '<div class="card"><p class="dica-campo">Pra ver ou trocar as credenciais, abra esta aba com internet. Sem carregar o que está gravado, salvar apagaria a chave atual.</p></div>');
