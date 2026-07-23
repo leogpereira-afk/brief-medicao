@@ -220,20 +220,28 @@ function abrirLightbox(fotos, inicio) {
     '</div>';
   const img = $('img', lb);
   const leg = $('.legenda', lb);
+  let atualB64 = null;   // a foto REALMENTE carregada (não o img.src, que vira a URL da página quando vazio)
+  let pedido = 0;        // token: só a última troca de foto vale
   $('.baixar', lb).onclick = () => {
-    if (!img.src || img.src.length < 30) return;
+    // Só baixa se a foto carregou. Antes, tocar antes de carregar salvava a
+    // própria página como ".jpg" (img.src vazio resolvia pra URL do app).
+    if (!atualB64) { toast('Espere a foto carregar pra baixar.', 'erro'); return; }
     const f = fotos[idx];
     const a = document.createElement('a');
-    a.href = img.src;
+    a.href = atualB64;
     a.download = arquivoSeguro(f.legenda || 'foto') + '.jpg';
     document.body.appendChild(a); a.click(); a.remove();
   };
   async function mostrar() {
     const f = fotos[idx];
+    const meu = ++pedido;
+    atualB64 = null;
     leg.textContent = (f.legenda || '') + '  (' + (idx + 1) + ' de ' + fotos.length + ')';
-    img.src = '';
+    img.removeAttribute('src');
     const b64 = await STORE.pullPhoto(f.id);
-    if (b64) img.src = b64; else leg.textContent = 'Foto ainda não sincronizada neste aparelho';
+    if (meu !== pedido) return; // o usuário já pulou pra outra foto: ignora esta
+    if (b64) { atualB64 = b64; img.src = b64; }
+    else leg.textContent = 'Foto ainda não sincronizada neste aparelho';
   }
   $('.fechar', lb).onclick = () => lb.remove();
   lb.addEventListener('click', e => { if (e.target === lb) lb.remove(); });
@@ -735,6 +743,7 @@ function montarPrancha(base, extra) {
     id: STORE.uuid(),
     cliente: b.cliente || '',
     contato: b.responsavel || b.cliente || '',
+    telefone: b.telefone || '',   // vai pra prancha da rua (instalação)
     vendedor: b.vendedor || '',
     designer: (SESSAO && SESSAO.nome) || '',
     osNumero: String(b.osNumero || '').trim(),
@@ -777,30 +786,55 @@ function fotoPrincipal(b) {
 function renderLayout(app) {
   if (!podeUsarLayout()) { toast('O gerador de layout é da área do designer', 'erro'); location.hash = '#/lista'; return; }
   const modo = ROTA.modo;
-  // Sair de um modo encerra o rascunho dele (evita misturar dois trabalhos)
-  if (modo !== 'projeto') PROJ._aberto = false;
-  if (modo !== 'producao') PROD._aberto = false;
+  // Só ENTRAR NO OUTRO modo encerra o rascunho (evita misturar dois trabalhos).
+  // Passar pela tela de modos NÃO apaga mais: o designer ia conferir uma medida,
+  // voltava, e o cliente/endereço/setores que ele tinha digitado sumiam.
+  if (modo === 'projeto') PROD._aberto = false;
+  if (modo === 'producao') PROJ._aberto = false;
   if (modo === 'producao') return renderLayoutProducao(app);
   if (modo === 'projeto') return renderLayoutProjeto(app);
   return renderLayoutInicio(app);
 }
 
+// Há rascunho aberto em algum modo? (pra avisar em vez de perder calado)
+function rascunhoProducao() {
+  return !!(PROD._aberto && (String(PROD.osNumero || '').trim() || String(PROD.cliente || '').trim() || PROD.setores.length));
+}
+function rascunhoProjeto() {
+  return !!(PROJ._aberto && (PROJ.imagens.length || String(PROJ.cliente || '').trim()));
+}
+
 function renderLayoutInicio(app) {
   document.title = 'Gerador de layout';
+  const temProd = rascunhoProducao(), temProj = rascunhoProjeto();
   app.innerHTML =
     htmlTopo('Gerador de layout') +
     '<main class="miolo">' +
     '<p class="dica-campo" style="margin:4px 2px 16px">As duas opções usam o mesmo modelo de prancha, preenchido automático.</p>' +
+    // O rascunho sobrevive a passar por aqui; o aviso deixa isso explícito e dá
+    // o botão pra começar limpo quando é outro trabalho.
+    (temProd || temProj
+      ? '<div class="aviso indigo" style="margin-bottom:14px">Você tem um trabalho em andamento em <b>' +
+        (temProd ? 'Produção' : 'Projeto') + '</b>. Entrar de novo continua de onde parou. ' +
+        '<button class="botao mini fantasma" id="lay-zerar" style="margin-left:8px">Começar do zero</button></div>'
+      : '') +
     '<div class="portas portas-layout">' +
     '<button class="porta" data-modo="producao">' +
     '<span class="icone-porta">🏭</span><span class="nome-porta">PRODUÇÃO</span>' +
-    '<span class="desc-porta">Uma prancha por setor, a partir de um briefing</span></button>' +
+    '<span class="desc-porta">Uma prancha por setor, a partir da O.S. ou de um briefing</span></button>' +
     '<button class="porta" data-modo="projeto">' +
     '<span class="icone-porta">🖼</span><span class="nome-porta">PROJETO</span>' +
     '<span class="desc-porta">Layout aprovado: solta os JPGs e sai o PDF</span></button>' +
     '</div></main>';
   ligarTopo();
   $$('[data-modo]').forEach(bt => bt.onclick = () => { location.hash = '#/layout/' + bt.dataset.modo; });
+  const zerar = $('#lay-zerar');
+  if (zerar) zerar.onclick = () => confirmar('Começar do zero?',
+    'Vai apagar o que você já preencheu no gerador de layout.', 'Começar do zero', () => {
+      PROD = Object.assign({}, PROD_VAZIO);
+      PROJ = { briefingId: '', busca: '', cliente: '', contato: '', osNumero: '', imagens: [] };
+      renderApp();
+    }, true);
 }
 
 /* ── Modo Produção ─────────────────────────────────────────────────────── */
@@ -823,6 +857,7 @@ function baseProducao() {
   return {
     cliente: PROD.cliente || (os && os.cliente) || (b && b.cliente) || '',
     responsavel: PROD.contato || (os && os.contato) || (b && b.responsavel) || '',
+    telefone: (os && os.telefone) || (b && b.telefone) || '',
     vendedor: PROD.vendedor || (os && os.vendedor) || (b && b.vendedor) || '',
     endereco: PROD.endereco || (os && os.endereco) || (b && b.endereco) || '',
     osNumero: String(PROD.osNumero || (b && b.osNumero) || '').trim()
@@ -1223,13 +1258,61 @@ function ligarFicha(raiz, m) {
   });
 }
 
+// A ficha de UMA prancha tem algo marcado/escrito?
+function loteFichaMarcada(p) {
+  const f = p && p.ficha;
+  if (!f) return false;
+  if (Object.values(f.soltas || {}).some(Boolean)) return true;
+  return Object.values(f.tabelas || {}).some(t =>
+    Object.values(t.marcas || {}).some(Boolean) ||
+    Object.values(t.rotulos || {}).some(v => String(v || '').trim()) ||
+    Object.values(t.valores || {}).some(col => Object.values(col || {}).some(v => String(v || '').trim())));
+}
+// O lote inteiro tem trabalho que se perde ao cancelar? (ficha + carimbos + obs)
+function loteTemMarcacao() {
+  if (!LOTE) return false;
+  return LOTE.itens.some(p =>
+    p.urgente || p.espelhado || p.dataEntrega || String(p.obs || '').trim() ||
+    String(p.tituloServico || '').trim() || loteFichaMarcada(p));
+}
+
+// Escolhe uma foto do briefing (ou pede um arquivo do computador).
+function escolherFotoDoBriefing(fotos, aoEscolher) {
+  const m = abrirModal(
+    '<h3>Qual foto vai na prancha?</h3>' +
+    '<p class="dica-campo">Fotos deste briefing. Toque numa pra usar.</p>' +
+    '<div class="grade-galeria" id="esc-fotos" style="margin-top:12px">' +
+    fotos.map(f => '<figure><img data-escolher="' + esc(f.id) + '" alt="' + esc(f.legenda) + '">' +
+      '<figcaption>' + esc(f.legenda) + '</figcaption></figure>').join('') +
+    '</div>' +
+    '<div class="acoes-modal">' +
+    '<button class="botao fantasma btn-cancelar">Cancelar</button>' +
+    '<button class="botao suave btn-arquivo">🖼 Escolher do computador</button></div>'
+  );
+  const imgs = $$('img[data-escolher]', m);
+  carregarThumbsEmFila(imgs.map(i => { i.dataset.fotoId = i.dataset.escolher; return i; }));
+  imgs.forEach(img => img.onclick = () => { m.remove(); aoEscolher(img.dataset.escolher); });
+  $('.btn-cancelar', m).onclick = () => m.remove();
+  $('.btn-arquivo', m).onclick = () => { m.remove(); aoEscolher('__arquivo__'); };
+}
+
 function abrirPreviaLote() {
   if (!LOTE || !LOTE.itens.length) return;
   const cfg = LOTE.cfg || STORE.getCFG();
   const tiposServico = cfg.tiposServico || [];
+  const cab = LOTE.itens[0] || {};
   const m = abrirModal(
     '<h3>' + LOTE.itens.length + ' prancha(s) prontas</h3>' +
     '<p class="dica-campo">Confira e ajuste antes de exportar. O que ficar em branco sai em branco pra preencher à mão.</p>' +
+    // Cabeçalho comum a todas as pranchas, visível e editável -- antes, no modo
+    // Projeto, dava pra exportar com o cabeçalho em branco sem perceber.
+    '<div class="card" style="margin-bottom:12px"><div class="sub-secao">Cabeçalho (vale pra todas)</div>' +
+    '<div class="linha-2">' +
+    '<div class="campo"><label>Cliente</label><input id="lote-cliente" type="text" value="' + esc(cab.cliente || '') + '"></div>' +
+    '<div class="campo"><label>Contato</label><input id="lote-contato" type="text" value="' + esc(cab.contato || '') + '"></div>' +
+    '</div>' +
+    '<div class="campo"><label>O.S. (se tiver)</label><input id="lote-os" type="text" inputmode="numeric" value="' + esc(cab.osNumero || '') + '"></div>' +
+    '</div>' +
     '<div id="lote-lista" style="margin-top:12px">' +
     LOTE.itens.map((p, i) =>
       '<div class="card-prancha" data-pi="' + i + '">' +
@@ -1266,27 +1349,47 @@ function abrirPreviaLote() {
     '<button class="botao fantasma btn-cancelar">Cancelar</button>' +
     '<button class="botao suave btn-separados">PDFs separados</button>' +
     '<button class="botao btn-unico">📄 PDF único</button>' +
-    '</div>'
+    '</div>',
+    { persistente: true } // não fecha no toque fora: guarda a ficha marcada
   );
 
+  // Cabeçalho comum: escreve em TODAS as pranchas do lote.
+  const setCab = (campo, val) => LOTE.itens.forEach(p => { p[campo] = val; });
+  $('#lote-cliente', m).oninput = e => setCab('cliente', e.target.value);
+  $('#lote-contato', m).oninput = e => setCab('contato', e.target.value);
+  $('#lote-os', m).oninput = e => setCab('osNumero', e.target.value.trim());
+
+  // Guarda o selo anterior de cada select, pra confirmar antes de trocar a ficha.
+  const seloAnterior = {};
   $$('[data-pcampo]', m).forEach(el => {
+    if (el.dataset.pcampo === 'seloServico') seloAnterior[el.dataset.pi] = el.value;
     const ev = el.tagName === 'SELECT' ? 'onchange' : 'oninput';
     el[ev] = () => {
       const i = Number(el.dataset.pi);
-      LOTE.itens[i][el.dataset.pcampo] = el.value;
       if (el.dataset.pcampo === 'seloServico') {
         const card = $('.card-prancha[data-pi="' + i + '"]', m);
-        const chip = $('.selo-mini', card);
-        if (chip) chip.textContent = el.value || 'sem selo';
-        // Cada setor tem a SUA ficha. Trocar o selo sem trocar a ficha deixava
-        // o designer marcando "Alvenaria texturizada" numa prancha de Router.
         const corpo = $('.ficha-corpo', card);
-        if (corpo) {
-          LOTE.itens[i].ficha = { tabelas: {}, soltas: {} };
-          corpo.innerHTML = htmlFichaSetor(LOTE.itens[i], i);
-          ligarFicha(corpo, m);
-        }
+        // Trocar o selo troca a ficha do setor. Se já havia marcação, confirma
+        // antes de apagar -- antes sumia sem avisar.
+        const jaMarcada = corpo && loteFichaMarcada(LOTE.itens[i]);
+        const aplicar = () => {
+          LOTE.itens[i].seloServico = el.value;
+          const chip = $('.selo-mini', card); if (chip) chip.textContent = el.value || 'sem selo';
+          if (corpo) {
+            LOTE.itens[i].ficha = { tabelas: {}, soltas: {} };
+            corpo.innerHTML = htmlFichaSetor(LOTE.itens[i], i);
+            ligarFicha(corpo, m);
+          }
+          seloAnterior[i] = el.value;
+        };
+        if (jaMarcada) {
+          confirmar('Trocar o setor?', 'A ficha que você marcou nesta prancha vai ser apagada (cada setor tem a sua). Trocar mesmo assim?',
+            'Trocar', aplicar, true);
+          el.value = seloAnterior[i]; // desfaz visualmente até confirmar
+        } else aplicar();
+        return;
       }
+      LOTE.itens[i][el.dataset.pcampo] = el.value;
     };
   });
   $$('[data-carimbo]', m).forEach(ch => ch.onclick = () => {
@@ -1301,9 +1404,26 @@ function abrirPreviaLote() {
     const iso = dataBrParaISO(el.value, '12:00');
     LOTE.itens[Number(el.dataset.pdata)].dataEntrega = iso || '';
   });
+  // "Trocar foto": quando o lote veio de um briefing, oferece PRIMEIRO as fotos
+  // dele. Antes só abria o disco do computador -- e a prancha ficava sempre com
+  // a primeira foto (muitas vezes a de contexto, não a que interessa).
   $$('[data-troca-img]', m).forEach(bt => bt.onclick = () => {
     const i = bt.dataset.trocaImg;
-    $('[data-input-img="' + i + '"]', m).click();
+    const brief = LOTE.briefingId ? STORE.getOS(LOTE.briefingId) : null;
+    const fotos = brief ? fotosDoBriefing(brief) : [];
+    if (!fotos.length) { $('[data-input-img="' + i + '"]', m).click(); return; }
+    escolherFotoDoBriefing(fotos, async (escolha) => {
+      if (escolha === '__arquivo__') { $('[data-input-img="' + i + '"]', m).click(); return; }
+      const b64 = await STORE.pullPhoto(escolha);
+      if (!b64) { toast('Essa foto ainda não sincronizou neste aparelho', 'erro'); return; }
+      const k = Number(i);
+      LOTE.itens[k].imagem = b64;
+      LOTE.itens[k].imagemId = escolha;
+      const card = $('.card-prancha[data-pi="' + k + '"]', m);
+      const img = $('.thumb-prancha', card);
+      if (img) img.src = b64;
+      else card.querySelector('.acoes-prancha').insertAdjacentHTML('afterbegin', '<img class="thumb-prancha" src="' + b64 + '" alt="">');
+    });
   });
   $$('[data-input-img]', m).forEach(inp => inp.onchange = async () => {
     const f = inp.files && inp.files[0];
@@ -1319,9 +1439,35 @@ function abrirPreviaLote() {
     else card.querySelector('.acoes-prancha').insertAdjacentHTML('afterbegin', '<img class="thumb-prancha" src="' + base64 + '" alt="">');
   });
 
-  $('.btn-cancelar', m).onclick = () => m.remove();
-  $('.btn-unico', m).onclick = () => { m.remove(); exportarLote(false); };
-  $('.btn-separados', m).onclick = () => { m.remove(); exportarLote(true); };
+  // Cancelar confirma quando há ficha/carimbo marcados (não dá pra reabrir).
+  $('.btn-cancelar', m).onclick = () => {
+    if (loteTemMarcacao()) {
+      confirmar('Descartar as pranchas?', 'Você marcou fichas ou carimbos. Fechar agora perde tudo isso -- não dá pra reabrir depois.',
+        'Descartar', () => m.remove(), true);
+    } else m.remove();
+  };
+  // Só fecha a prévia DEPOIS do PDF sair. Antes fechava na hora e, se a geração
+  // falhava, a ficha marcada já tinha ido embora.
+  const exportar = async (separados, btn) => {
+    // Não exporta sem cliente: o cabeçalho sairia em branco na produção.
+    if (!String((LOTE.itens[0] || {}).cliente || '').trim()) {
+      toast('Preencha o Cliente no cabeçalho antes de exportar.', 'erro');
+      const c = $('#lote-cliente', m); if (c) c.focus();
+      return;
+    }
+    const outros = $$('.acoes-modal .botao', m);
+    outros.forEach(b => b.disabled = true);
+    const txt = btn.textContent; btn.textContent = 'Gerando…';
+    try {
+      const ok = await exportarLote(separados);
+      if (ok !== false) m.remove(); // fechou só porque deu certo
+      else { outros.forEach(b => b.disabled = false); btn.textContent = txt; }
+    } catch (e) {
+      outros.forEach(b => b.disabled = false); btn.textContent = txt;
+    }
+  };
+  $('.btn-unico', m).onclick = (e) => exportar(false, e.currentTarget);
+  $('.btn-separados', m).onclick = (e) => exportar(true, e.currentTarget);
 }
 
 // prancha.js declara `const PRANCHA`: carregar duas vezes quebra a página
@@ -1344,7 +1490,7 @@ function ensurePrancha() {
 }
 
 async function exportarLote(separados) {
-  if (!LOTE || !LOTE.itens.length) return;
+  if (!LOTE || !LOTE.itens.length) return false;
   // Congela o lote agora: a exportação demora (downloads em fila) e o designer
   // pode montar outro lote no meio. Sem esta cópia, o segundo lote era gravado
   // no lugar do primeiro.
@@ -1368,7 +1514,7 @@ async function exportarLote(separados) {
   } catch (e) {
     console.error(e);
     toast('Não consegui gerar o PDF: ' + e.message, 'erro');
-    return;
+    return false; // deu erro: a prévia NÃO deve fechar (a ficha continua lá)
   }
   // Guardar no histórico é uma etapa separada: se ela falhar, o PDF já foi
   // baixado e o usuário precisa saber disso, não que "não conseguiu gerar".
@@ -1378,6 +1524,7 @@ async function exportarLote(separados) {
     console.error(e);
     toast('PDF baixado, mas não consegui guardar no histórico do briefing', 'erro');
   }
+  return true;
 }
 
 // Guarda a prancha no briefing (ou num registro avulso), com histórico de versões.
@@ -1394,7 +1541,7 @@ async function salvarLoteNoBriefing(loteRecebido) {
     // devolvia a folha em branco e perdia o que o designer preencheu.
     ficha: p.ficha || null,
     imagemId: p.imagemId || null,
-    cliente: p.cliente, contato: p.contato, vendedor: p.vendedor, designer: p.designer,
+    cliente: p.cliente, contato: p.contato, telefone: p.telefone || '', vendedor: p.vendedor, designer: p.designer,
     osNumero: p.osNumero, endereco: p.endereco, data: p.data,
     equipe: p.equipe || [], ferramentas: p.ferramentas || [], acessorios: p.acessorios || []
   });
@@ -1448,13 +1595,29 @@ async function regerarVersao(b, versao) {
     await ensurePrancha();
     const cfg = STORE.getCFG();
     const itens = [];
+    let semFoto = 0;
     for (const p of versao.itens) {
       const imagem = p.imagemId ? await STORE.pullPhoto(p.imagemId) : null;
+      // A foto pode ter sido apagada na limpeza em lote, ou não ter sincronizado.
+      // Sem este aviso, saía "PDF pronto ✓" com o quadro do desenho VAZIO e a
+      // prancha ia pra produção sem imagem.
+      if (p.imagemId && !imagem) semFoto++;
       itens.push(Object.assign({}, p, { imagem, textoDireitos: cfg.textoDireitos || '' }));
     }
-    const doc = await PRANCHA.gerarPdf(itens, cfg);
-    doc.save('pranchas-v' + versao.versao + '-' + arquivoSeguro(b.cliente) + '.pdf');
-    toast('PDF pronto ✓', 'sucesso');
+    const gerar = async () => {
+      const doc = await PRANCHA.gerarPdf(itens, cfg);
+      const marca = semFoto ? '-SEM-IMAGEM' : '';
+      doc.save('pranchas-v' + versao.versao + marca + '-' + arquivoSeguro(b.cliente) + '.pdf');
+      toast(semFoto ? 'PDF gerado, mas ' + semFoto + ' prancha(s) saíram SEM imagem' : 'PDF pronto ✓', semFoto ? 'erro' : 'sucesso');
+    };
+    if (semFoto) {
+      confirmar(semFoto + ' prancha(s) sem imagem',
+        'A imagem de ' + semFoto + ' prancha(s) não está mais neste aparelho (limpeza de fotos ou ainda não sincronizou). ' +
+        'O PDF sai com o quadro do desenho <b>em branco</b>. Gerar assim mesmo?',
+        'Gerar assim', () => { gerar().catch(e => toast('Não consegui remontar: ' + e.message, 'erro')); });
+      return;
+    }
+    await gerar();
   } catch (e) {
     console.error(e);
     toast('Não consegui remontar: ' + e.message, 'erro');
@@ -2352,7 +2515,11 @@ function ligarEditor(cfg) {
   bind('#c-quemmediu', 'quemMediu');
   const osn = $('#c-osnumero');
   if (osn) osn.oninput = () => {
-    BRIEF.osNumero = osn.value.trim();
+    const novo = osn.value.trim();
+    // Mudou o número: o serviço da O.S. antiga não vale mais. Antes ele ficava
+    // colado e saía errado na ficha e no PDF.
+    if (novo !== BRIEF.osNumero) { BRIEF.osServico = ''; BRIEF.osOrigem = ''; }
+    BRIEF.osNumero = novo;
     if (BRIEF.osNumero) BRIEF.semOS = false;
     salvarRascunho();
   };
@@ -2852,6 +3019,7 @@ function enviarBriefing() {
     BRIEF.status = BRIEF.tipoMedicao === 'Execução' ? 'Aprovado pra execução' : 'Aguardando orçamento';
     BRIEF.enviadoEm = new Date().toISOString();
     BRIEF.semOS = !String(BRIEF.osNumero || '').trim();
+    delete BRIEF.devolucao; // reenviou: o recado de correção não vale mais
     // NÃO diz "enviado" se não conseguiu nem gravar no aparelho. Antes, com a
     // memória cheia, aparecia "enviado ✓" e o briefing sumia sem nunca subir.
     const gravou = salvarRascunho(true);
@@ -2922,8 +3090,22 @@ function renderDetalhe(app) {
     '<button class="botao mini fantasma" id="btn-ficha-det">🖨 Ficha de visita (PDF)</button>' +
     (podeUsarLayout() ? '<button class="botao mini suave" id="btn-gerar-prancha"' + (liberado ? '' : ' disabled') + '>🗂 Gerar prancha</button>' : '') +
     (podeGerir || meu ? '<button class="botao mini suave" id="btn-vincular-os">' + (semOS ? '🔗 Vincular O.S.' : '🔗 Trocar O.S.') + '</button>' : '') +
+    // Corrigir depois de enviado: o design devolve pro vendedor com um recado,
+    // em vez de a correção virar telefonema que nunca volta pro registro.
+    (podeGerir && b.situacao === 'enviado' && !b.apagadoEm
+      ? '<button class="botao mini fantasma" id="btn-devolver">↩️ Devolver pro vendedor</button>' : '') +
     (SESSAO.papel === 'admin' && !b.apagadoEm ? '<button class="botao mini perigo" id="btn-lixeira">🗑 Mover pra lixeira</button>' : '') +
     '</div>' +
+    // Quem NÃO pode editar precisa saber por quê e o que fazer.
+    (b.situacao === 'enviado' && SESSAO.papel !== 'admin' && !podeGerir
+      ? '<div class="aviso amarelo" style="margin-top:12px">Este briefing já foi enviado, por isso não abre pra edição. ' +
+        'Achou um erro numa medida? Peça ao design para <b>devolver pro vendedor</b> — aí ele volta a abrir pra você corrigir.</div>'
+      : '') +
+    (b.devolucao
+      ? '<div class="aviso vermelho" style="margin-top:12px">↩️ <b>Devolvido pra correção</b> por ' +
+        esc(b.devolucao.por) + ' em ' + fmtDataHora(b.devolucao.em) +
+        (b.devolucao.motivo ? ':<br>“' + esc(b.devolucao.motivo) + '”' : '') + '</div>'
+      : '') +
     (podeGerir && b.situacao === 'enviado'
       ? '<div class="campo" style="margin-top:12px; max-width:340px"><label>Status</label><select id="sel-status">' +
         STATUS_LISTA.map(s => '<option ' + (b.status === s ? 'selected' : '') + '>' + esc(s) + '</option>').join('') + '</select></div>'
@@ -3118,6 +3300,8 @@ function renderDetalhe(app) {
   };
   const vinc = $('#btn-vincular-os');
   if (vinc) vinc.onclick = () => abrirVincularOS(b);
+  const dev = $('#btn-devolver');
+  if (dev) dev.onclick = () => abrirDevolver(b);
   const lix = $('#btn-lixeira');
   if (lix) lix.onclick = () => confirmar('Mover pra lixeira',
     'O briefing sai das listas e fica 30 dias recuperável na lixeira do admin. Depois disso é apagado de vez.', 'Mover', () => {
@@ -3129,6 +3313,34 @@ function renderDetalhe(app) {
       toast('Movido pra lixeira');
       location.hash = '#/lista';
     }, true);
+}
+
+// Devolve o briefing pro vendedor corrigir: volta a ser rascunho (reabre pra
+// edição) e guarda o recado de quem devolveu e por quê.
+function abrirDevolver(b) {
+  const m = abrirModal(
+    '<h3>Devolver pro vendedor</h3>' +
+    '<p class="dica-campo">O briefing volta a abrir pra edição do vendedor e sai da fila do design. Diga o que precisa corrigir.</p>' +
+    '<div class="campo" style="margin-top:10px"><label>O que corrigir</label>' +
+    '<textarea id="dev-motivo" rows="3" placeholder="Ex: a largura do item 2 está 180, confirmar se não é 108"></textarea></div>' +
+    '<div class="acoes-modal">' +
+    '<button class="botao fantasma btn-cancelar">Cancelar</button>' +
+    '<button class="botao btn-ok">↩️ Devolver</button></div>'
+  );
+  $('.btn-cancelar', m).onclick = () => m.remove();
+  $('.btn-ok', m).onclick = () => {
+    const motivo = $('#dev-motivo', m).value.trim();
+    if (!motivo) { toast('Escreva o que precisa ser corrigido.', 'erro'); return; }
+    b.situacao = 'rascunho';
+    b.status = '';
+    b.devolucao = { por: SESSAO.nome, em: new Date().toISOString(), motivo };
+    b.atualizadoEm = new Date().toISOString();
+    b.atualizadoPor = SESSAO.nome;
+    STORE.saveOS(JSON.parse(JSON.stringify(b)));
+    m.remove();
+    toast('Devolvido pro vendedor ✓', 'sucesso');
+    renderApp();
+  };
 }
 
 function abrirVincularOS(b) {
@@ -3144,10 +3356,13 @@ function abrirVincularOS(b) {
   );
   const salvar = (origem, servico) => {
     const numero = $('#v-numero', m).value.trim();
+    const mudou = numero !== (b.osNumero || '');
     b.osNumero = numero;
     b.semOS = !numero;
-    if (origem) b.osOrigem = origem;
-    if (servico) b.osServico = servico;
+    if (origem) b.osOrigem = origem; else if (mudou) b.osOrigem = '';
+    // Serviço só vale pra O.S. que o buscou. Trocou o número sem buscar? Limpa,
+    // senão o serviço da O.S. antiga sai errado na ficha e no PDF.
+    if (servico) b.osServico = servico; else if (mudou) b.osServico = '';
     b.atualizadoEm = new Date().toISOString();
     b.atualizadoPor = SESSAO.nome;
     STORE.saveOS(JSON.parse(JSON.stringify(b)));
@@ -3674,6 +3889,19 @@ function renderArquivos(app) {
 
   const visiveis = prontos.slice(0, ARQ.limite);
 
+  // Pranchas geradas SEM briefing (direto da O.S. ou modo Projeto). Antes elas
+  // não apareciam em lugar nenhum do app -- o designer refazia o lote inteiro
+  // quando a produção pedia de novo.
+  const avulsas = STORE.getAllOS()
+    .filter(x => x && !x.apagadoEm && x.avulsa && (x.pranchas || []).length)
+    .filter(x => {
+      const t = norm(ARQ.busca);
+      if (!t) return true;
+      return norm((x.cliente || '') + ' ' + (x.osNumero || '')).includes(t);
+    })
+    .sort((a, z) => String(z.criadoEm || '').localeCompare(String(a.criadoEm || '')))
+    .slice(0, 10);
+
   app.innerHTML =
     htmlTopo('Arquivos') +
     '<main class="miolo">' +
@@ -3681,6 +3909,22 @@ function renderArquivos(app) {
     '<p class="dica-campo" style="margin-bottom:10px">As fotos e desenhos de cada visita, prontos pra baixar. Toque numa foto pra ver grande.</p>' +
     '<div class="campo"><input id="arq-busca" type="text" placeholder="Cliente, O.S., Nº do brief ou data" value="' + esc(ARQ.busca) + '"></div>' +
     '</div>' +
+
+    (avulsas.length
+      ? '<div class="card"><div class="sub-secao">Pranchas geradas sem briefing</div>' +
+        '<p class="dica-campo" style="margin-bottom:10px">Feitas direto da O.S. ou do modo Projeto. Dá pra baixar o PDF de novo sem remontar.</p>' +
+        avulsas.map(a => (a.pranchas || []).slice().reverse().map(v =>
+          '<div class="resumo-item" style="display:flex; justify-content:space-between; align-items:center; gap:10px; flex-wrap:wrap">' +
+          '<div><b class="fonte-titulo">' + esc(a.cliente || 'Sem nome') + '</b>' +
+          '<div class="dica-campo">' +
+          (String(a.osNumero || '').trim() ? 'O.S. ' + esc(a.osNumero) + ' · ' : 'sem O.S. · ') +
+          'v' + v.versao + ' · ' + v.itens.length + ' prancha(s) · ' +
+          esc(v.itens.map(p => p.seloServico || 'sem selo').join(', ')) + '<br>' +
+          esc(v.criadoPor || '') + ' · ' + fmtDataHora(v.criadoEm) + '</div></div>' +
+          '<button class="botao mini suave" data-avulsa="' + esc(a.id) + '" data-versao="' + v.versao + '">📄 Baixar PDF</button>' +
+          '</div>').join('')).join('') +
+        '</div>'
+      : '') +
 
     (visiveis.length
       ? visiveis.map(b => {
@@ -3727,21 +3971,61 @@ function renderArquivos(app) {
 
   // Miniaturas: cada uma busca a sua foto e abre o visualizador com a galeria
   // INTEIRA do briefing (não só as 6 que estão à vista).
+  // Carregar as miniaturas em FILA (poucas por vez): abrir Arquivos disparava
+  // dezenas de downloads de foto cheia ao mesmo tempo e o navegador engasgava,
+  // deixando quadrados cinza pra sempre. Aqui a fila é global e limitada.
+  const fila = [];
   visiveis.forEach(b => {
     const cont = $('[data-galeria-arq="' + b.id + '"]');
     if (!cont) return;
     const fotos = fotosDoBriefing(b);
     $$('img[data-foto-id]', cont).forEach(img => {
-      STORE.pullPhoto(img.dataset.fotoId).then(b64 => { if (b64) img.src = b64; });
       img.onclick = () => abrirLightbox(fotos, fotos.findIndex(x => x.id === img.dataset.fotoId));
+      fila.push(img);
     });
     const bt = $('[data-mais="' + b.id + '"]', cont);
     if (bt) bt.onclick = () => abrirLightbox(fotos, ARQ_POR_CARTAO);
   });
+  carregarThumbsEmFila(fila);
   $$('[data-zip]').forEach(bt => bt.onclick = () => {
     const b = STORE.getOS(bt.dataset.zip);
     if (b) baixarFotosDoBriefing(b);
   });
+  // Rebaixar o PDF de uma prancha avulsa (sem briefing).
+  $$('[data-avulsa]').forEach(bt => bt.onclick = () => {
+    const a = STORE.getOS(bt.dataset.avulsa);
+    const v = a && (a.pranchas || []).find(x => String(x.versao) === bt.dataset.versao);
+    if (v) regerarVersao(a, v);
+  });
+}
+
+// Carrega miniaturas de foto no máximo N por vez. Falha vira um botão "tentar
+// de novo" no lugar do quadrado, em vez de ficar cinza calado.
+async function carregarThumbsEmFila(imgs, limite) {
+  const max = limite || 4;
+  let i = 0;
+  const proxima = async () => {
+    while (i < imgs.length) {
+      const img = imgs[i++];
+      if (!img.isConnected) continue;
+      try {
+        const b64 = await STORE.pullPhoto(img.dataset.fotoId);
+        if (b64) img.src = b64;
+        else marcarThumbFalha(img);
+      } catch { marcarThumbFalha(img); }
+    }
+  };
+  await Promise.all(Array.from({ length: Math.min(max, imgs.length) }, proxima));
+}
+function marcarThumbFalha(img) {
+  if (!img.isConnected) return;
+  const fig = img.closest('figure') || img.parentElement;
+  const btn = document.createElement('button');
+  btn.className = 'thumb-retry';
+  btn.textContent = '↻ tentar';
+  btn.title = 'A foto não carregou — tocar pra tentar de novo';
+  btn.onclick = () => { const novo = img.cloneNode(true); btn.replaceWith(novo); carregarThumbsEmFila([novo], 1); };
+  img.replaceWith(btn);
 }
 
 /* ══════════════════ Arquivos das fotos (para o designer) ══════════════════ */
@@ -3769,26 +4053,39 @@ function baixarBlob(blob, nome) {
 
 // Junta todas as fotos do briefing (itens + croquis) num zip com nomes que já
 // dizem de qual item e de que ângulo é cada uma.
+let _baixandoZip = false;
 async function baixarFotosDoBriefing(b, apenasItem) {
   if (!b.visitaConcluida && b.situacao !== 'enviado') {
     toast('Conclua a visita antes de baixar os arquivos', 'erro');
     return;
   }
+  // Trava contra clique repetido: sem isto, o zip demorava, o designer clicava
+  // de novo e caíam vários zips iguais.
+  if (_baixandoZip) { toast('Já estou montando o arquivo, aguarde…'); return; }
+  _baixandoZip = true;
   const alvo = apenasItem ? [apenasItem] : (b.itens || []);
-  toast('Preparando as fotos…');
+  // Total previsto, pra mostrar "montando X de Y".
+  const totalPrev = alvo.reduce((s, it) => s + (it.fotos || []).filter(f => !f.arquivada).length, 0) +
+    (apenasItem ? 0 : (b.croquis || []).filter(c => !c.arquivada).length);
   try {
     await ensureZip();
     const arquivos = [];
     const pasta = pastaDoBriefing(b);
-    let faltando = 0;
+    let faltando = 0, feitas = 0;
+    // Um único aviso de progresso que se atualiza (em vez de encher a tela).
+    let area = $('#toasts'); if (!area) { area = document.createElement('div'); area.id = 'toasts'; document.body.appendChild(area); }
+    const prog = document.createElement('div'); prog.className = 'toast'; area.appendChild(prog);
+    const passo = () => { feitas++; prog.textContent = 'Montando… ' + feitas + ' de ' + totalPrev; };
+    prog.textContent = 'Montando… 0 de ' + totalPrev;
 
     for (const item of alvo) {
       const i = (b.itens || []).indexOf(item);
       for (const f of (item.fotos || [])) {
         if (f.arquivada) continue;
         const b64 = await STORE.pullPhoto(f.id);
-        if (!b64) { faltando++; continue; }
+        if (!b64) { faltando++; passo(); continue; }
         arquivos.push({ nome: pasta + '/' + nomeArquivoFoto(b, i < 0 ? 0 : i, item, f.tipo), dados: ZIP.base64ParaBytes(b64) });
+        passo();
       }
     }
     if (!apenasItem) {
@@ -3796,21 +4093,35 @@ async function baixarFotosDoBriefing(b, apenasItem) {
         const c = b.croquis[ci];
         if (c.arquivada) continue;
         const b64 = await STORE.pullPhoto(c.id);
-        if (!b64) { faltando++; continue; }
+        if (!b64) { faltando++; passo(); continue; }
         arquivos.push({ nome: pasta + '/desenho-' + pad2(ci + 1) + '.jpg', dados: ZIP.base64ParaBytes(b64) });
+        passo();
       }
     }
 
+    prog.remove(); // fim do progresso
     if (!arquivos.length) {
-      toast(faltando ? 'As fotos ainda não sincronizaram neste aparelho' : 'Não há fotos para baixar', 'erro');
+      toast(faltando ? 'As fotos ainda não sincronizaram neste aparelho. Sincronize e tente de novo.' : 'Não há fotos para baixar', 'erro');
       return;
     }
-    const zip = ZIP.criar(arquivos, new Date(b.dataHora || Date.now()));
-    baixarBlob(zip, pasta + (apenasItem ? '-item' : '') + '-fotos.zip');
-    toast(arquivos.length + ' foto(s) baixadas' + (faltando ? ' · ' + faltando + ' ainda não sincronizada(s)' : ''), 'sucesso');
+    // Faltou foto: pergunta antes e marca o nome do arquivo, pra ninguém montar
+    // a prancha achando que baixou tudo.
+    const baixar = () => {
+      const zip = ZIP.criar(arquivos, new Date(b.dataHora || Date.now()));
+      const marca = faltando ? '-INCOMPLETO-' + arquivos.length + 'de' + (arquivos.length + faltando) : '';
+      baixarBlob(zip, pasta + (apenasItem ? '-item' : '') + '-fotos' + marca + '.zip');
+      toast(arquivos.length + ' foto(s) baixadas' + (faltando ? ' · FALTARAM ' + faltando + ' (ainda não sincronizadas)' : ' ✓'), faltando ? 'erro' : 'sucesso');
+    };
+    if (faltando) {
+      confirmar('Faltam ' + faltando + ' foto(s)',
+        faltando + ' foto(s) ainda não sincronizaram neste aparelho. Dá pra baixar as ' + arquivos.length + ' que já tem (o arquivo sai marcado como INCOMPLETO), ou sincronizar e tentar de novo.',
+        'Baixar as ' + arquivos.length, baixar);
+    } else baixar();
   } catch (e) {
     console.error(e);
     toast('Não consegui montar o arquivo: ' + e.message, 'erro');
+  } finally {
+    _baixandoZip = false;
   }
 }
 

@@ -272,7 +272,10 @@ const PRANCHA = (() => {
     const corte = wMeio * 0.56;
     caixa(doc, xMeio, y0, wMeio, linha);
     rotuloValor(doc, 'Cliente:', p.cliente, xMeio + 8, y0 + linha / 2 + 4, corte - 12, 10.5, 10.5, 2);
-    rotuloValor(doc, 'Contato:', p.contato, xMeio + corte, y0 + linha / 2 + 4, wMeio - corte - 10, 10.5, 10.5, 2);
+    // Telefone do cliente junto do contato: a equipe de rua liga direto do papel
+    // em vez de telefonar pro escritório pra descobrir o número.
+    const contatoTxt = p.contato + (p.telefone ? '  ·  ' + p.telefone : '');
+    rotuloValor(doc, 'Contato:', contatoTxt, xMeio + corte, y0 + linha / 2 + 4, wMeio - corte - 10, 10.5, 10.5, 2);
 
     caixa(doc, xMeio, y0 + linha, wMeio, linha);
     rotuloValor(doc, 'Vend:', p.vendedor, xMeio + 8, y0 + linha * 1.5 + 4, corte - 12, 10.5);

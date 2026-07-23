@@ -338,6 +338,13 @@ input:focus, select:focus, textarea:focus { outline: none; border-color: var(--i
   font-family: 'Poppins'; font-weight: 600; font-size: 1rem;
 }
 .mais-fotos:hover { border-color: var(--indigo); }
+/* Quadrado de foto que não carregou: botão de tentar de novo no lugar do cinza */
+.thumb-retry {
+  width: 100%; height: 110px; border: 1.5px dashed var(--alerta, #B7791F);
+  border-radius: 10px; background: var(--alerta-bg, #FBF1DE); color: var(--alerta, #B7791F);
+  font-family: 'Poppins'; font-weight: 600; font-size: .82rem; cursor: pointer;
+}
+.thumb-retry:hover { filter: brightness(.97); }
 
 /* ── Ficha do setor (checklist clicável da prancha) ────────────────────────── */
 .ficha-setor { border: 1px solid var(--borda); border-radius: 10px; margin-bottom: 10px; background: #fff; }
