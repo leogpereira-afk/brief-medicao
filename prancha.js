@@ -323,17 +323,66 @@ const PRANCHA = (() => {
     return y + alt;
   }
 
+  // Quantas linhas a obs precisa dentro de uma largura (máx. 3: acima disso o
+  // corpo da prancha ficaria sem espaço pro desenho).
+  function linhasObs(doc, texto, largura) {
+    if (!texto) return [];
+    doc.setFont('Poppins', 'normal'); doc.setFontSize(9);
+    return doc.splitTextToSize(String(texto), largura).slice(0, 3);
+  }
+
+  // Desenha "Obs:" com quebra de linha de verdade. Antes era uma linha só que
+  // encolhia até virar letra de formiga -- observação de instalação não cabe
+  // em meia linha.
+  function escreverObs(doc, texto, x, y, largura) {
+    doc.setFont('Poppins', 'normal'); doc.setFontSize(9); doc.setTextColor(...PRETO);
+    doc.text('Obs:', x, y);
+    const xv = x + doc.getTextWidth('Obs:') + 6;
+    const ls = linhasObs(doc, texto, largura - (xv - x));
+    doc.setTextColor(...CINZA_TXT);
+    ls.forEach((l, i) => doc.text(l, xv, y + i * 11));
+  }
+
   function linhaEnderecoObs(doc, p, y) {
-    const alt = 26, meio = W * 0.5;
+    const meio = W * 0.5;
+    const nLinhas = Math.max(1, linhasObs(doc, p.obs, W - M - meio - 40).length);
+    const alt = Math.max(26, 15 + nLinhas * 11);
     caixa(doc, M, y, meio - M, alt);
     caixa(doc, meio, y, W - M - meio, alt);
     rotuloValor(doc, 'Endereço:', p.endereco, M + 8, y + 17, meio - M - 20, 11);
-    rotuloValor(doc, 'Obs:', p.obs, meio + 8, y + 17, W - M - meio - 20, 11);
+    escreverObs(doc, p.obs, meio + 8, y + 15, W - M - meio - 20);
     return y + alt;
   }
 
+  // Só a obs, largura inteira. Usada nos setores de produção (que têm a barra
+  // de ATENÇÃO no lugar da linha de endereço) e só aparece quando há texto:
+  // sem obs, a prancha continua idêntica ao modelo em uso.
+  function linhaSoObs(doc, p, y) {
+    if (!p.obs) return y;
+    const nLinhas = Math.max(1, linhasObs(doc, p.obs, W - 2 * M - 40).length);
+    const alt = Math.max(20, 12 + nLinhas * 11);
+    caixa(doc, M, y, W - 2 * M, alt);
+    escreverObs(doc, p.obs, M + 8, y + 14, W - 2 * M - 20);
+    return y + alt;
+  }
+
+  // Visto do checklist. Desenhado em vetor (duas linhas) pra sair nítido na
+  // gráfica e não depender de fonte com o caractere ✓.
+  function visto(doc, x, y, tam) {
+    const t = tam || 15;
+    doc.setDrawColor(...VERMELHO); doc.setLineWidth(1.6);
+    doc.line(x + t * 0.22, y + t * 0.52, x + t * 0.42, y + t * 0.74);
+    doc.line(x + t * 0.42, y + t * 0.74, x + t * 0.80, y + t * 0.26);
+    doc.setDrawColor(...BORDA); doc.setLineWidth(0.8);
+  }
+
   // ── Tabela de checklist do setor ──────────────────────────────────────────
-  function tabelaCheck(doc, tab, x, y) {
+  // `dados` é o que o designer preencheu na prévia:
+  //   { marcas: {i:true}, rotulos: {i:'texto'}, valores: {i:{j:'texto'}} }
+  // Sem `dados`, sai a ficha em branco de sempre (pra preencher à mão).
+  function tabelaCheck(doc, tab, x, y, dados) {
+    const d = dados || {};
+    const marcas = d.marcas || {}, rotulos = d.rotulos || {}, valores = d.valores || {};
     const wCheck = tab.semCheck ? 0 : 15;
     const wRotulo = 128;
     const wCol = 62;
@@ -357,19 +406,33 @@ const PRANCHA = (() => {
 
     let yy = y + hTitulo;
     tab.itens.forEach((item, i) => {
-      if (!tab.semCheck) caixa(doc, x, yy, wCheck, hLinha);
+      if (!tab.semCheck) {
+        caixa(doc, x, yy, wCheck, hLinha);
+        if (marcas[i]) visto(doc, x, yy, hLinha);
+      }
       const corFundo = tab.cores && tab.cores[i];
       if (corFundo) {
         doc.setFillColor(...corFundo);
         doc.rect(x + wCheck, yy, wRotulo, hLinha, 'F');
       }
       caixa(doc, x + wCheck, yy, wRotulo, hLinha);
-      if (item) {
+      // Linha em branco ou terminada em ":" pode ter sido escrita na prévia
+      const escrito = String(rotulos[i] || '').trim();
+      const texto = escrito ? (item && /:$/.test(item) ? item + ' ' + escrito : escrito) : item;
+      if (texto) {
         doc.setFont('Poppins', 'normal'); doc.setFontSize(7.4);
         doc.setTextColor(...(corFundo ? [255, 255, 255] : PRETO));
-        doc.text(cortar(doc, item, wRotulo - 8), x + wCheck + wRotulo / 2, yy + 9.2, { align: 'center' });
+        doc.text(cortar(doc, texto, wRotulo - 8), x + wCheck + wRotulo / 2, yy + 9.2, { align: 'center' });
       }
-      cols.forEach((c, j) => caixa(doc, x + wCheck + wRotulo + j * wCol, yy, wCol, hLinha));
+      cols.forEach((c, j) => {
+        const cx = x + wCheck + wRotulo + j * wCol;
+        caixa(doc, cx, yy, wCol, hLinha);
+        const v = valores[i] && valores[i][j];
+        if (v) {
+          doc.setFont('Poppins', 'normal'); doc.setFontSize(7.2); doc.setTextColor(...PRETO);
+          doc.text(cortar(doc, String(v), wCol - 6), cx + wCol / 2, yy + 9.2, { align: 'center' });
+        }
+      });
       yy += hLinha;
     });
     return { altura: yy - y, largura };
@@ -451,9 +514,14 @@ const PRANCHA = (() => {
   // ── Uma prancha ───────────────────────────────────────────────────────────
   async function desenhar(doc, p, cfg) {
     const modelo = modeloDe(p.seloServico || p.setor);
+    const ficha = p.ficha || {};          // o que o designer marcou na prévia
     let y = cabecalho(doc, p, cfg, modelo);
-    if (modelo.atencao) y = barraAtencao(doc, y);
-    else if (modelo.enderecoObs) y = linhaEnderecoObs(doc, p, y);
+    if (modelo.atencao) {
+      y = barraAtencao(doc, y);
+      // Setor de produção não tem linha de endereço; a obs, quando existe,
+      // ganha uma faixa própria em vez de se perder.
+      y = linhaSoObs(doc, p, y);
+    } else if (modelo.enderecoObs) y = linhaEnderecoObs(doc, p, y);
 
     const yCorpo = y + 6;
     const yFimCorpo = H - 34;
@@ -461,15 +529,17 @@ const PRANCHA = (() => {
     // Checklists do setor, na lateral esquerda
     let yTab = yCorpo + 4;
     let larguraTabelas = 0;
-    (modelo.caixasSoltas || []).forEach(rot => {
+    (modelo.caixasSoltas || []).forEach((rot, i) => {
       caixa(doc, M + 4, yTab, 16, 16);
+      if (ficha.soltas && ficha.soltas[i]) visto(doc, M + 4, yTab, 16);
       doc.setFont('Poppins', 'normal'); doc.setFontSize(8.4); doc.setTextColor(...PRETO);
       doc.text(rot, M + 26, yTab + 11.5);
       yTab += 24;
       larguraTabelas = Math.max(larguraTabelas, 120);
     });
-    for (const tab of (modelo.tabelas || [])) {
-      const r = tabelaCheck(doc, tab, M + 4, yTab);
+    const tabelas = modelo.tabelas || [];
+    for (let ti = 0; ti < tabelas.length; ti++) {
+      const r = tabelaCheck(doc, tabelas[ti], M + 4, yTab, (ficha.tabelas || {})[ti]);
       yTab += r.altura + 12;
       larguraTabelas = Math.max(larguraTabelas, r.largura);
       if (yTab > yFimCorpo - 30) break; // não invade o rodapé

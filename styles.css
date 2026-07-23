@@ -55,7 +55,15 @@ a { color: var(--indigo); }
   display: flex; align-items: center; gap: 10px;
   box-shadow: 0 2px 10px rgba(42, 48, 184, .35);
 }
-.topo .marca { display: flex; align-items: center; gap: 9px; min-width: 0; flex: 1; }
+/* A marca é um link pra tela inicial: precisa de área de toque e não pode
+   herdar o sublinhado/cor de link. */
+.topo .marca {
+  display: flex; align-items: center; gap: 9px; min-width: 0; flex: 1;
+  color: inherit; text-decoration: none; border-radius: 10px;
+  padding: 2px 4px; margin: -2px -4px; cursor: pointer;
+  -webkit-tap-highlight-color: transparent;
+}
+.topo .marca:hover, .topo .marca:focus-visible { background: rgba(255,255,255,.12); outline: none; }
 .topo .marca img { height: 26px; width: auto; background: #fff; border-radius: 7px; padding: 3px 6px; }
 .topo .marca .titulo { font-family: 'Poppins'; font-weight: 600; font-size: 1.02rem; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
 .topo .marca .sub { font-size: .72rem; opacity: .85; font-family: 'Poppins'; font-weight: 500; }
@@ -63,7 +71,13 @@ a { color: var(--indigo); }
   font-family: 'Poppins'; font-weight: 600; font-size: .72rem;
   padding: 5px 10px; border-radius: 999px; white-space: nowrap;
   background: rgba(255,255,255,.16); border: 1px solid rgba(255,255,255,.28);
+  color: #fff; cursor: pointer; min-height: 32px;
+  -webkit-tap-highlight-color: transparent;
 }
+.chip-sync:hover:not(:disabled) { filter: brightness(1.15); }
+.chip-sync:disabled { cursor: default; opacity: .85; }
+.chip-sync.rodando { animation: pulsa-sync 1s ease-in-out infinite; }
+@keyframes pulsa-sync { 50% { opacity: .55; } }
 .chip-sync.ok { background: rgba(34,197,94,.25); border-color: rgba(134,239,172,.6); }
 .chip-sync.pending { background: rgba(251,191,36,.3); border-color: rgba(253,224,71,.6); }
 .chip-sync.offline { background: rgba(248,113,113,.3); border-color: rgba(252,165,165,.6); }
@@ -267,6 +281,62 @@ input:focus, select:focus, textarea:focus { outline: none; border-color: var(--i
 .acoes-prancha { display: flex; align-items: center; gap: 10px; flex-wrap: wrap; }
 .thumb-prancha { width: 74px; height: 56px; object-fit: cover; border-radius: 7px; background: var(--indigo-8); }
 .link-remover { background: none; border: 0; color: var(--perigo); cursor: pointer; font-size: .72rem; font-family: 'Poppins'; padding: 0; }
+
+/* ── Duas fontes de dados lado a lado (O.S. | briefing) ────────────────────── */
+.duas-buscas { display: grid; grid-template-columns: 1fr; gap: 12px; }
+@media (min-width: 760px) { .duas-buscas { grid-template-columns: 1fr 1fr; gap: 16px; } }
+.busca-fonte { border: 1px solid var(--borda); border-radius: 12px; padding: 12px; background: #fff; }
+.busca-fonte > input[type="text"] { width: 100%; }
+.titulo-fonte {
+  font-family: 'Poppins'; font-weight: 600; font-size: .8rem;
+  color: var(--indigo-escuro); margin-bottom: 8px;
+  display: flex; align-items: center; gap: 6px;
+}
+/* A lista de briefings não pode empurrar o resto da tela pra fora da vista */
+.lista-escolha.rolagem-curta { max-height: 210px; overflow-y: auto; margin-top: 8px; }
+
+/* ── Ficha do setor (checklist clicável da prancha) ────────────────────────── */
+.ficha-setor { border: 1px solid var(--borda); border-radius: 10px; margin-bottom: 10px; background: #fff; }
+.ficha-setor > summary {
+  cursor: pointer; padding: 9px 12px; font-family: 'Poppins'; font-weight: 600;
+  font-size: .84rem; color: var(--indigo-escuro); list-style: none;
+}
+.ficha-setor > summary::-webkit-details-marker { display: none; }
+.ficha-setor > summary::after { content: ' ▾'; opacity: .55; }
+.ficha-setor[open] > summary::after { content: ' ▴'; }
+.ficha-setor[open] > summary { border-bottom: 1px solid var(--borda); }
+.ficha-corpo { padding: 10px 12px 12px; }
+.ficha-tabela { margin-bottom: 12px; }
+.ficha-titulo {
+  font-family: 'Poppins'; font-weight: 600; font-size: .74rem; text-transform: uppercase;
+  letter-spacing: .3px; color: var(--indigo); margin-bottom: 5px;
+  display: flex; align-items: baseline; gap: 8px; flex-wrap: wrap;
+}
+.ficha-cols { font-weight: 500; font-size: .66rem; text-transform: none; letter-spacing: 0; color: var(--texto-fraco, #6b7280); }
+/* Linha inteira clicável: o alvo de toque é a linha, não o quadradinho */
+.linha-check {
+  display: flex; align-items: center; gap: 8px;
+  padding: 5px 6px; border-radius: 8px; min-height: 38px;
+}
+.linha-check:nth-child(even) { background: rgba(0, 0, 0, .022); }
+.linha-check input[type="checkbox"] { width: 20px; height: 20px; flex: none; accent-color: var(--indigo); cursor: pointer; }
+.linha-check .sem-check { width: 20px; flex: none; }
+.linha-check .rotulo-check { flex: 1; font-size: .82rem; min-width: 0; }
+.linha-check .rotulo-check.curto { flex: none; font-weight: 600; color: var(--indigo-escuro); }
+.linha-check.solta { font-family: 'Poppins'; font-weight: 600; }
+.linha-check .campo-livre, .linha-check .campo-col {
+  border: 1px solid var(--borda); border-radius: 7px; padding: 6px 8px;
+  font-size: .8rem; font-family: inherit; min-width: 0; background: #fff;
+}
+.linha-check .campo-livre { flex: 1; }
+.linha-check .campo-col { width: 84px; flex: none; }
+.linha-check .campo-livre:focus, .linha-check .campo-col:focus { outline: 2px solid var(--indigo); outline-offset: -1px; }
+/* No celular a linha quebra: rótulo em cima, campos embaixo */
+@media (max-width: 560px) {
+  .linha-check { flex-wrap: wrap; }
+  .linha-check .rotulo-check, .linha-check .campo-livre { flex: 1 1 60%; }
+  .linha-check .campo-col { flex: 1 1 40%; width: auto; }
+}
 
 /* Admin: quais fotos cada tipo de item exige */
 .tabela-fotos { overflow-x: auto; }

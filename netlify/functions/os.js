@@ -199,7 +199,7 @@ exports.handler = async (event, context) => {
         const foiEnviado = !toSave.avulsa && toSave.situacao === 'enviado' &&
           (!existing || existing.situacao !== 'enviado');
         if (!existing) {
-          await registrarLog({ quem, acao: 'criou o briefing', ...base });
+          await registrarLog({ quem, acao: toSave.avulsa ? 'criou prancha avulsa' : 'criou o briefing', ...base });
         } else if (toSave.apagadoEm && !existing.apagadoEm) {
           await registrarLog({ quem, acao: 'moveu pra lixeira', ...base });
         } else if (!toSave.apagadoEm && existing.apagadoEm) {

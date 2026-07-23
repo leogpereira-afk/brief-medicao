@@ -305,15 +305,19 @@ const ITENS_RECOLHIDOS = new Set();
 const OS_ITENS_DESMARCADOS = new Set();
 let FILTROS = { texto: '', os: '', de: '', ate: '', deBr: '', ateBr: '', status: '', vendedor: '', tipo: '', semOS: false };
 let SYNC_ESTADO = { status: 'ok', pendentes: 0 };
+// Ligado enquanto o botão de sincronizar do topo está rodando.
+let _sincronizando = false;
 
 function ehDesktop() { return window.matchMedia('(min-width: 900px)').matches; }
 
 STORE.onSync((status, pendentes) => {
   SYNC_ESTADO = { status, pendentes };
   const chip = $('#chip-sync');
-  if (chip) {
+  // Enquanto o usuário está sincronizando pelo botão, não sobrescreve o
+  // "Sincronizando…": o retorno some antes de ser lido e parece que nada rodou.
+  if (chip && !_sincronizando) {
     chip.className = 'chip-sync ' + status;
-    chip.textContent = status === 'ok' ? 'Sincronizado' : status === 'pending' ? pendentes + ' pendente(s)' : 'Offline';
+    chip.textContent = rotuloSync(status, pendentes);
   }
   // O servidor atribui o número do brief na primeira sincronização; quando ele
   // chega, atualiza a tela aberta sem re-renderizar (pra não roubar o foco).
@@ -384,15 +388,24 @@ function lerRota() {
 
 function podeCriar() { return SESSAO && (SESSAO.papel === 'vendedor' || SESSAO.papel === 'admin'); }
 
+// Texto do botão de sincronização, a partir do estado atual.
+function rotuloSync(status, pendentes) {
+  if (status === 'ok') return 'Sincronizado';
+  if (status === 'pending') return (pendentes || 0) + ' pendente(s)';
+  return 'Offline';
+}
+
 function htmlTopo(tituloTela) {
   const chip = SYNC_ESTADO.status;
   return (
     '<header class="topo">' +
-    '<div class="marca">' +
+    // A logo leva pra tela inicial: é o "voltar pro começo" que todo mundo
+    // tenta por instinto. Sem isso, só o menu ☰ saía das telas internas.
+    '<a class="marca" href="#/" title="Voltar para a tela inicial">' +
     '<img src="logo-impresilk.png" alt="Impresilk">' +
     '<div><div class="titulo">' + esc(tituloTela || 'Brief de Medição') + '</div>' +
     '<div class="sub">Impresilk · ' + esc(SESSAO ? SESSAO.nome : '') + '</div></div>' +
-    '</div>' +
+    '</a>' +
     '<nav class="nav-desktop">' +
     '<a href="#/lista" class="' + (ROTA.nome === 'lista' ? 'ativo' : '') + '">Briefings</a>' +
     (podeCriar() ? '<a href="#/novo">+ Novo</a>' : '') +
@@ -400,8 +413,11 @@ function htmlTopo(tituloTela) {
     (SESSAO && SESSAO.papel === 'admin' ? '<a href="#/admin" class="' + (ROTA.nome === 'admin' ? 'ativo' : '') + '">Painel de controle</a>' : '') +
     '<a href="#" id="link-sair-desktop">Sair</a>' +
     '</nav>' +
-    '<span id="chip-sync" class="chip-sync ' + chip + '">' +
-    (chip === 'ok' ? 'Sincronizado' : chip === 'pending' ? SYNC_ESTADO.pendentes + ' pendente(s)' : 'Offline') + '</span>' +
+    // O estado da sincronização é BOTÃO, não etiqueta: antes ele só informava, e
+    // quem via "2 pendente(s)" não tinha onde apertar -- tinha que abrir o menu
+    // e achar "Sincronizar agora". Agora o próprio aviso resolve.
+    '<button type="button" id="chip-sync" class="chip-sync ' + chip + '" ' +
+    'title="Tocar para sincronizar agora">' + esc(rotuloSync(chip, SYNC_ESTADO.pendentes)) + '</button>' +
     '<button class="botao-menu" id="botao-menu" aria-label="Menu">☰</button>' +
     '</header>'
   );
@@ -412,6 +428,39 @@ function ligarTopo() {
   if (b) b.onclick = abrirMenu;
   const sair = $('#link-sair-desktop');
   if (sair) sair.onclick = e => { e.preventDefault(); sairDaConta(); };
+  const chip = $('#chip-sync');
+  if (chip) chip.onclick = () => sincronizarAgora();
+}
+
+// Sincroniza e DIZ o que aconteceu. O botão fica travado enquanto roda, senão
+// dá pra disparar cinco vezes seguidas achando que não funcionou.
+async function sincronizarAgora() {
+  if (_sincronizando) return;
+  _sincronizando = true;
+  const chip = $('#chip-sync');
+  if (chip) { chip.disabled = true; chip.classList.add('rodando'); chip.textContent = 'Sincronizando…'; }
+  try {
+    // pull devolve undefined quando NÃO conseguiu falar com o servidor. Sem
+    // olhar isso, uma fila vazia virava "Tudo sincronizado ✓" mesmo com o
+    // servidor fora do ar -- a mentira mais cara que este botão podia contar.
+    const r = await STORE.pull(() => renderApp());
+    await STORE.trySync();
+    const pend = (STORE.getQueue() || []).length;
+    if (!navigator.onLine) toast('Sem conexão agora. Sincroniza sozinho quando voltar o sinal.', 'erro');
+    else if (!r) toast('Não consegui falar com o servidor agora. O que você fez está salvo neste aparelho.', 'erro');
+    else if (pend > 0) toast(pend + ' item(ns) ainda na fila. Continua tentando sozinho.', 'erro');
+    else toast('Tudo sincronizado ✓', 'sucesso');
+  } catch (e) {
+    toast('Não consegui sincronizar agora: ' + (e && e.message ? e.message : 'sem conexão'), 'erro');
+  } finally {
+    _sincronizando = false;
+    const c = $('#chip-sync');
+    if (c) {
+      c.disabled = false; c.classList.remove('rodando');
+      c.className = 'chip-sync ' + SYNC_ESTADO.status;
+      c.textContent = rotuloSync(SYNC_ESTADO.status, SYNC_ESTADO.pendentes);
+    }
+  }
 }
 
 function abrirMenu() {
@@ -661,14 +710,51 @@ function renderLayoutInicio(app) {
 
 /* ── Modo Produção ─────────────────────────────────────────────────────── */
 
-let PROD = { briefingId: '', setores: [], busca: '' };
+// A prancha de produção nasce da O.S., não do briefing. O briefing é só um
+// atalho opcional (traz foto e medidas já conferidas na visita): exigir um
+// briefing enviado travava o designer em todo trabalho que não passou por
+// visita -- que é a maioria.
+const PROD_VAZIO = {
+  osNumero: '', os: null, erroOS: '', buscando: false,
+  cliente: '', contato: '', vendedor: '', endereco: '',
+  briefingId: '', busca: '', setores: []
+};
+let PROD = Object.assign({}, PROD_VAZIO);
+
+// Dados do cabeçalho, venham da O.S., do briefing ou da mão do designer.
+function baseProducao() {
+  const b = PROD.briefingId ? STORE.getOS(PROD.briefingId) : null;
+  const os = PROD.os;
+  return {
+    cliente: PROD.cliente || (os && os.cliente) || (b && b.cliente) || '',
+    responsavel: PROD.contato || (os && os.contato) || (b && b.responsavel) || '',
+    vendedor: PROD.vendedor || (os && os.vendedor) || (b && b.vendedor) || '',
+    endereco: PROD.endereco || (os && os.endereco) || (b && b.endereco) || '',
+    osNumero: String(PROD.osNumero || (b && b.osNumero) || '').trim()
+  };
+}
+
+// Resumo das medidas vindo das linhas da O.S. (quando não há briefing)
+function medidasDaOS(os) {
+  return ((os && os.itens) || []).map(x => {
+    const q = x.qtde && String(x.qtde) !== '1' ? ' (' + x.qtde + 'x)' : '';
+    return (x.descricao || 'Item') + q + (x.medidas ? ': ' + x.medidas : '');
+  }).join('\n');
+}
+
+function temDadosProducao() {
+  const base = baseProducao();
+  return !!(base.cliente || base.osNumero);
+}
 
 function renderLayoutProducao(app) {
   document.title = 'Pranchas de produção';
-  if (!PROD._aberto) PROD = Object.assign({ briefingId: '', setores: [], busca: '' }, PROD.briefingId ? { briefingId: PROD.briefingId } : {}, { _aberto: true });
+  if (!PROD._aberto) PROD = Object.assign({}, PROD_VAZIO, { _aberto: true });
   const cfg = STORE.getCFG();
   const setores = cfg.setoresProducao || [];
   const b = PROD.briefingId ? STORE.getOS(PROD.briefingId) : null;
+  const base = baseProducao();
+  const pronto = temDadosProducao();
 
   const candidatos = STORE.getAllOS()
     .filter(x => x && !x.apagadoEm && !x.avulsa && x.situacao === 'enviado')
@@ -686,16 +772,38 @@ function renderLayoutProducao(app) {
     '<main class="miolo">' +
     '<a href="#/layout" class="dica-campo" style="display:inline-block; margin-bottom:10px">← modos</a>' +
 
-    '<div class="card"><div class="sub-secao">1 · Escolha o briefing</div>' +
-    '<div class="campo"><input id="pr-busca" type="text" placeholder="Cliente, O.S., Nº do brief ou data" value="' + esc(PROD.busca) + '"></div>' +
+    '<div class="card"><div class="sub-secao">1 · De onde vêm os dados</div>' +
+    '<p class="dica-campo" style="margin-bottom:12px">Os dois caminhos valem e dá pra usar os dois juntos: a O.S. preenche o cabeçalho, o briefing traz as fotos e as medidas da visita.</p>' +
+
+    // Os dois buscadores lado a lado. Nenhum é obrigatório: o cabeçalho embaixo
+    // aceita ser preenchido na mão (e é o único caminho quando cai a internet).
+    '<div class="duas-buscas">' +
+
+    '<div class="busca-fonte">' +
+    '<div class="titulo-fonte"><span>📄</span><span>Pela O.S.</span></div>' +
+    '<div style="display:flex; gap:8px">' +
+    '<input id="pr-os" type="text" inputmode="numeric" placeholder="Nº da O.S. — ex: 22416" value="' + esc(PROD.osNumero) + '" style="flex:1">' +
+    '<button class="botao mini" id="pr-buscar"' + (PROD.buscando ? ' disabled' : '') + '>' +
+    (PROD.buscando ? 'Buscando…' : 'Buscar') + '</button></div>' +
+    (PROD.erroOS ? '<div class="aviso amarelo" style="margin-top:8px">' + esc(PROD.erroOS) + '</div>' : '') +
+    (PROD.os
+      ? '<div class="aviso verde" style="margin-top:8px"><b>' + esc(PROD.os.cliente || 'Sem nome') + '</b>' +
+        (PROD.os.servico ? ' · ' + esc(PROD.os.servico) : '') +
+        ((PROD.os.itens || []).length ? ' · ' + PROD.os.itens.length + ' item(ns) na O.S.' : '') +
+        ' <button class="botao mini fantasma" id="pr-limpar-os" style="margin-left:8px">Trocar</button></div>'
+      : '') +
+    '</div>' +
+
+    '<div class="busca-fonte">' +
+    '<div class="titulo-fonte"><span>📋</span><span>Por um briefing</span></div>' +
+    '<input id="pr-busca" type="text" placeholder="Cliente, O.S., Nº do brief ou data" value="' + esc(PROD.busca) + '">' +
     (b
-      ? '<div class="aviso verde"><b>' + esc(b.cliente) + '</b>' +
+      ? '<div class="aviso verde" style="margin-top:8px"><b>' + esc(b.cliente) + '</b>' +
         (b.numeroBrief ? ' · Nº ' + padBrief(b.numeroBrief) : '') +
-        (String(b.osNumero || '').trim() ? ' · O.S. ' + esc(b.osNumero) : ' · sem O.S.') +
         ' · ' + (b.itens || []).length + ' item(ns)' +
-        ' <button class="botao mini fantasma" id="pr-trocar" style="margin-left:8px">Trocar</button></div>'
+        ' <button class="botao mini fantasma" id="pr-trocar" style="margin-left:8px">Desvincular</button></div>'
       : (candidatos.length
-        ? '<div class="lista-escolha">' + candidatos.map(x =>
+        ? '<div class="lista-escolha rolagem-curta">' + candidatos.map(x =>
             '<button class="opcao-briefing" data-brief="' + x.id + '">' +
             '<b>' + esc(x.cliente || 'Sem nome') + '</b>' +
             '<span class="dica-campo">' + (x.numeroBrief ? 'Nº ' + padBrief(x.numeroBrief) + ' · ' : '') +
@@ -704,20 +812,52 @@ function renderLayoutProducao(app) {
         : '<div class="vazio">Nenhum briefing enviado encontrado.</div>')) +
     '</div>' +
 
+    '</div>' +
+
+    // Sempre editável: as fontes trazem o que têm, o designer corrige o que faltar.
+    '<div class="sub-secao" style="margin-top:16px">Cabeçalho da prancha</div>' +
+    '<div class="linha-2">' +
+    '<div class="campo"><label>Cliente</label><input id="pr-cliente" type="text" value="' + esc(base.cliente) + '"></div>' +
+    '<div class="campo"><label>Contato</label><input id="pr-contato" type="text" value="' + esc(base.responsavel) + '"></div>' +
+    '</div><div class="linha-2">' +
+    '<div class="campo"><label>Vendedor</label><input id="pr-vendedor" type="text" value="' + esc(base.vendedor) + '"></div>' +
+    '<div class="campo"><label>Endereço</label><input id="pr-endereco" type="text" value="' + esc(base.endereco) + '"></div>' +
+    '</div>' +
+    '</div>' +
+
     '<div class="card"><div class="sub-secao">2 · Setores envolvidos</div>' +
     '<p class="dica-campo" style="margin-bottom:10px">Cada setor marcado vira uma prancha, numerada em sequência.</p>' +
     '<div class="chips">' +
     setores.map(s => '<button class="chip ' + (PROD.setores.includes(s) ? 'marcado' : '') + '" data-setor="' + esc(s) + '">' + esc(s) + '</button>').join('') +
     '</div></div>' +
 
-    '<button class="botao largo" id="pr-gerar"' + (b && PROD.setores.length ? '' : ' disabled') + '>' +
+    '<button class="botao largo" id="pr-gerar"' + (pronto && PROD.setores.length ? '' : ' disabled') + '>' +
     '⚙️ Gerar ' + (PROD.setores.length || '') + ' prancha' + (PROD.setores.length === 1 ? '' : 's') + '</button>' +
-    (b && !PROD.setores.length ? '<p class="dica-campo" style="text-align:center; margin-top:8px">Marque pelo menos um setor.</p>' : '') +
+    (!pronto ? '<p class="dica-campo" style="text-align:center; margin-top:8px">Informe a O.S. ou pelo menos o cliente.</p>'
+      : (!PROD.setores.length ? '<p class="dica-campo" style="text-align:center; margin-top:8px">Marque pelo menos um setor.</p>' : '')) +
     '</main>';
 
   ligarTopo();
-  $('#pr-busca').oninput = debounce(e => { PROD.busca = e.target.value; renderApp(); }, 300);
-  $$('[data-brief]').forEach(bt => bt.onclick = () => { PROD.briefingId = bt.dataset.brief; renderApp(); });
+
+  // Campos do cabeçalho: gravam no estado sem re-renderizar (senão apaga o que
+  // está sendo digitado a cada tecla).
+  [['pr-os', 'osNumero'], ['pr-cliente', 'cliente'], ['pr-contato', 'contato'],
+   ['pr-vendedor', 'vendedor'], ['pr-endereco', 'endereco']].forEach(([id, campo]) => {
+    const el = $('#' + id);
+    if (el) el.oninput = () => { PROD[campo] = el.value; };
+  });
+  const bt = $('#pr-buscar');
+  if (bt) bt.onclick = () => buscarOSProducao();
+  const osInput = $('#pr-os');
+  if (osInput) osInput.onkeydown = e => { if (e.key === 'Enter') { e.preventDefault(); buscarOSProducao(); } };
+  const lim = $('#pr-limpar-os');
+  if (lim) lim.onclick = () => {
+    Object.assign(PROD, { os: null, osNumero: '', erroOS: '', cliente: '', contato: '', vendedor: '', endereco: '' });
+    renderApp();
+  };
+  const busca = $('#pr-busca');
+  if (busca) busca.oninput = debounce(e => { PROD.busca = e.target.value; renderApp(); }, 300);
+  $$('[data-brief]').forEach(x => x.onclick = () => { PROD.briefingId = x.dataset.brief; renderApp(); });
   const tr = $('#pr-trocar'); if (tr) tr.onclick = () => { PROD.briefingId = ''; renderApp(); };
   $$('[data-setor]').forEach(ch => ch.onclick = () => {
     const s = ch.dataset.setor;
@@ -726,18 +866,50 @@ function renderLayoutProducao(app) {
     renderApp();
   });
   const g = $('#pr-gerar');
-  if (g) g.onclick = () => gerarLoteProducao(b);
+  if (g) g.onclick = () => gerarLoteProducao();
 }
 
-async function gerarLoteProducao(b) {
-  if (!b || !PROD.setores.length) return;
+async function buscarOSProducao() {
+  const numero = String(PROD.osNumero || '').trim();
+  if (!numero) { PROD.erroOS = 'Digite o número da O.S. — ou preencha o cabeçalho à mão logo abaixo.'; renderApp(); return; }
+  PROD.buscando = true; PROD.erroOS = ''; renderApp();
+  try {
+    const res = await STORE.apiFn('mubisys', { action: 'buscarOS', numero });
+    if (res && res.encontrado && res.os) {
+      PROD.os = res.os;
+      // Só preenche o que o designer ainda não digitou: nunca sobrescreve
+      // correção feita à mão.
+      if (!PROD.cliente) PROD.cliente = res.os.cliente || '';
+      if (!PROD.contato) PROD.contato = res.os.contato || '';
+      if (!PROD.vendedor) PROD.vendedor = res.os.vendedor || '';
+      if (!PROD.endereco) PROD.endereco = res.os.endereco || '';
+      toast('O.S. ' + numero + ' encontrada ✓', 'sucesso');
+    } else {
+      PROD.os = null;
+      PROD.erroOS = 'O.S. não encontrada' +
+        (res && res.fontes && !res.fontes.mubisys && !res.fontes.pcp ? ' (integração ainda não configurada)' : '') +
+        '. Preencha o cabeçalho à mão — a prancha sai igual.';
+    }
+  } catch {
+    PROD.erroOS = 'Sem conexão agora. Preencha o cabeçalho à mão — a prancha sai igual.';
+  } finally {
+    PROD.buscando = false;
+    renderApp();
+  }
+}
+
+async function gerarLoteProducao() {
+  if (!PROD.setores.length || !temDadosProducao()) return;
   toast('Montando as pranchas…');
   const cfg = STORE.getCFG();
-  const fotoId = fotoPrincipal(b);
+  const b = PROD.briefingId ? STORE.getOS(PROD.briefingId) : null;
+  const base = baseProducao();
+  // Foto e medidas só existem quando há briefing; da O.S. vêm as linhas do pedido.
+  const fotoId = b ? fotoPrincipal(b) : null;
   const imagem = fotoId ? await STORE.pullPhoto(fotoId) : null;
-  const medidas = medidasDoBriefing(b);
+  const medidas = b ? medidasDoBriefing(b) : medidasDaOS(PROD.os);
   const total = PROD.setores.length;
-  const itens = PROD.setores.map((setor, i) => montarPrancha(b, {
+  const itens = PROD.setores.map((setor, i) => montarPrancha(base, {
     seloServico: setor,
     setor,
     tituloServico: setor.toUpperCase(),
@@ -745,7 +917,9 @@ async function gerarLoteProducao(b) {
     imagem, imagemId: fotoId,
     numero: i + 1, total
   }));
-  LOTE = { modo: 'producao', briefingId: b.id, itens, cfg };
+  LOTE = { modo: 'producao', briefingId: b ? b.id : '', itens, cfg };
+  // A prévia mostra a ficha do setor, que vem do modelo em prancha.js.
+  try { await ensureModelos(); } catch { /* sem ficha, o resto da prévia funciona */ }
   abrirPreviaLote();
 }
 
@@ -837,7 +1011,7 @@ function renderLayoutProjeto(app) {
 
 function p2n(n) { return String(n).padStart(2, '0'); }
 
-function gerarLoteProjeto(b) {
+async function gerarLoteProjeto(b) {
   if (!PROJ.imagens.length) return;
   const cfg = STORE.getCFG();
   const base = b || { cliente: PROJ.cliente, responsavel: PROJ.contato, osNumero: PROJ.osNumero };
@@ -850,10 +1024,109 @@ function gerarLoteProjeto(b) {
     numero: i + 1, total
   }));
   LOTE = { modo: 'projeto', briefingId: b ? b.id : '', itens, cfg };
+  try { await ensureModelos(); } catch { /* sem ficha, o resto da prévia funciona */ }
   abrirPreviaLote();
 }
 
 /* ── Pré-visualização e edição do lote ─────────────────────────────────── */
+
+// Modelo do setor (tabelas e caixas) — só existe depois que prancha.js carrega.
+function modeloDaPrancha(p) {
+  if (typeof PRANCHA === 'undefined') return null;
+  return PRANCHA.modeloDe(p.seloServico || p.setor);
+}
+
+// Estrutura onde ficam as marcas da ficha. Criada sob demanda pra não inchar
+// pranchas que ninguém preencheu.
+function fichaDe(p) {
+  if (!p.ficha) p.ficha = { tabelas: {}, soltas: {} };
+  return p.ficha;
+}
+function fichaTab(p, ti) {
+  const f = fichaDe(p);
+  if (!f.tabelas[ti]) f.tabelas[ti] = { marcas: {}, rotulos: {}, valores: {} };
+  return f.tabelas[ti];
+}
+
+// A ficha do setor, clicável. Cada linha do modelo vira uma linha de verdade:
+// caixa pra marcar, campo pra escrever quando a linha é livre ("Outros:" ou em
+// branco) e um campo por coluna extra (ESPESSURA, COR...).
+function htmlFichaSetor(p, i) {
+  const modelo = modeloDaPrancha(p);
+  if (!modelo) return '';
+  const tabelas = modelo.tabelas || [];
+  const soltas = modelo.caixasSoltas || [];
+  if (!tabelas.length && !soltas.length) {
+    return '<p class="dica-campo">Este setor não tem ficha própria — a prancha sai só com o cabeçalho e o desenho.</p>';
+  }
+  const f = p.ficha || { tabelas: {}, soltas: {} };
+  const marcado = (ti, li) => !!((f.tabelas[ti] || {}).marcas || {})[li];
+  const escrito = (ti, li) => String((((f.tabelas[ti] || {}).rotulos) || {})[li] || '');
+  const valor = (ti, li, ci) => String(((((f.tabelas[ti] || {}).valores) || {})[li] || {})[ci] || '');
+
+  return (
+    soltas.map((rot, si) =>
+      '<label class="linha-check solta">' +
+      '<input type="checkbox" data-solta="' + si + '" data-pi="' + i + '"' + (f.soltas[si] ? ' checked' : '') + '>' +
+      '<span class="rotulo-check">' + esc(rot) + '</span></label>').join('') +
+    tabelas.map((tab, ti) =>
+      '<div class="ficha-tabela">' +
+      '<div class="ficha-titulo">' + esc(tab.titulo) +
+      ((tab.colunas || []).length ? '<span class="ficha-cols">' + (tab.colunas || []).filter(Boolean).map(esc).join(' · ') + '</span>' : '') +
+      '</div>' +
+      (tab.itens || []).map((item, li) => {
+        const livre = !item || /:$/.test(item);
+        // Linha com rótulo fixo vira <label>: dá pra marcar tocando em qualquer
+        // ponto dela, que é o alvo que o dedo acerta. Linha livre fica <div>
+        // (o toque ali precisa ir pro campo de texto, não pra caixa).
+        const tag = livre ? 'div' : 'label';
+        return '<' + tag + ' class="linha-check">' +
+          (tab.semCheck ? '<span class="sem-check"></span>'
+            : '<input type="checkbox" data-marca="' + ti + '_' + li + '" data-pi="' + i + '"' + (marcado(ti, li) ? ' checked' : '') + '>') +
+          (livre
+            // Linha "Outros:" mantém o rótulo à vista: com o campo preenchido,
+            // só o texto digitado não diz de qual pergunta ele é a resposta.
+            ? (item ? '<span class="rotulo-check curto">' + esc(item) + '</span>' : '') +
+              '<input class="campo-livre" type="text" data-rotulo="' + ti + '_' + li + '" data-pi="' + i + '"' +
+              ' placeholder="' + esc(item ? 'escrever qual…' : 'escrever…') + '" value="' + esc(escrito(ti, li)) + '">'
+            : '<span class="rotulo-check">' + esc(item) + '</span>') +
+          (tab.colunas || []).map((c, ci) =>
+            '<input class="campo-col" type="text" data-valor="' + ti + '_' + li + '_' + ci + '" data-pi="' + i + '"' +
+            ' placeholder="' + esc(c || '—') + '" value="' + esc(valor(ti, li, ci)) + '">').join('') +
+          '</' + tag + '>';
+      }).join('') +
+      '</div>').join('')
+  );
+}
+
+// Liga os cliques da ficha. `raiz` é onde procurar os campos (o modal inteiro
+// no começo, só o bloco da ficha quando o setor troca); `m` é o modal, usado
+// pra achar a caixa de marcar da mesma linha.
+// Tudo grava direto no item do lote, sem re-renderizar: redesenhar o modal a
+// cada clique roubaria o foco de quem está digitando na coluna do lado.
+function ligarFicha(raiz, m) {
+  $$('[data-solta]', raiz).forEach(cb => cb.onchange = () => {
+    fichaDe(LOTE.itens[Number(cb.dataset.pi)]).soltas[Number(cb.dataset.solta)] = cb.checked;
+  });
+  $$('[data-marca]', raiz).forEach(cb => cb.onchange = () => {
+    const [ti, li] = cb.dataset.marca.split('_').map(Number);
+    fichaTab(LOTE.itens[Number(cb.dataset.pi)], ti).marcas[li] = cb.checked;
+  });
+  $$('[data-rotulo]', raiz).forEach(el => el.oninput = () => {
+    const [ti, li] = el.dataset.rotulo.split('_').map(Number);
+    fichaTab(LOTE.itens[Number(el.dataset.pi)], ti).rotulos[li] = el.value;
+  });
+  $$('[data-valor]', raiz).forEach(el => el.oninput = () => {
+    const [ti, li, ci] = el.dataset.valor.split('_').map(Number);
+    const t = fichaTab(LOTE.itens[Number(el.dataset.pi)], ti);
+    if (!t.valores[li]) t.valores[li] = {};
+    t.valores[li][ci] = el.value;
+    // Escrever numa coluna é dizer que a linha vale: marca sozinho, senão a
+    // produção recebe "ESPESSURA 3mm" numa linha sem visto e ignora.
+    const cb = $('[data-marca="' + ti + '_' + li + '"][data-pi="' + el.dataset.pi + '"]', m || raiz);
+    if (el.value.trim() && cb && !cb.checked) { cb.checked = true; t.marcas[li] = true; }
+  });
+}
 
 function abrirPreviaLote() {
   if (!LOTE || !LOTE.itens.length) return;
@@ -878,11 +1151,15 @@ function abrirPreviaLote() {
       '<div class="campo"><label>Entrega</label>' +
       '<input type="text" inputmode="numeric" maxlength="10" placeholder="dd/mm/aaaa" data-pdata="' + i + '" value="' + esc(p.dataEntrega ? isoParaDataBr(p.dataEntrega) : '') + '"></div>' +
       '</div>' +
-      '<div class="campo"><label>Obs</label><input type="text" data-pcampo="obs" data-pi="' + i + '" value="' + esc(p.obs) + '"></div>' +
+      '<div class="campo"><label>Obs</label>' +
+      '<textarea rows="2" data-pcampo="obs" data-pi="' + i + '" placeholder="Vai impressa na prancha (até 3 linhas)">' + esc(p.obs) + '</textarea></div>' +
       '<div class="chips" style="margin-bottom:10px">' +
-      '<button class="chip ' + (p.urgente ? 'marcado' : '') + '" data-carimbo="urgente" data-pi="' + i + '">Carimbo URGENTE</button>' +
-      '<button class="chip ' + (p.espelhado ? 'marcado' : '') + '" data-carimbo="espelhado" data-pi="' + i + '">Arquivo espelhado</button>' +
+      '<button class="chip ' + (p.urgente ? 'marcado' : '') + '" data-carimbo="urgente" data-pi="' + i + '">🔴 Carimbo URGENTE</button>' +
+      '<button class="chip ' + (p.espelhado ? 'marcado' : '') + '" data-carimbo="espelhado" data-pi="' + i + '">🔵 Arquivo espelhado</button>' +
       '</div>' +
+      // A ficha do setor: o que antes só dava pra marcar de caneta no papel.
+      '<details class="ficha-setor"><summary>📋 Ficha do setor — marcar aqui</summary>' +
+      '<div class="ficha-corpo">' + htmlFichaSetor(p, i) + '</div></details>' +
       '<div class="acoes-prancha">' +
       (p.imagem ? '<img class="thumb-prancha" src="' + p.imagem + '" alt="">' : '<span class="dica-campo">sem imagem</span>') +
       '<button class="botao mini suave" data-troca-img="' + i + '">Trocar foto</button>' +
@@ -900,10 +1177,20 @@ function abrirPreviaLote() {
   $$('[data-pcampo]', m).forEach(el => {
     const ev = el.tagName === 'SELECT' ? 'onchange' : 'oninput';
     el[ev] = () => {
-      LOTE.itens[Number(el.dataset.pi)][el.dataset.pcampo] = el.value;
+      const i = Number(el.dataset.pi);
+      LOTE.itens[i][el.dataset.pcampo] = el.value;
       if (el.dataset.pcampo === 'seloServico') {
-        const chip = $('.card-prancha[data-pi="' + el.dataset.pi + '"] .selo-mini', m);
+        const card = $('.card-prancha[data-pi="' + i + '"]', m);
+        const chip = $('.selo-mini', card);
         if (chip) chip.textContent = el.value || 'sem selo';
+        // Cada setor tem a SUA ficha. Trocar o selo sem trocar a ficha deixava
+        // o designer marcando "Alvenaria texturizada" numa prancha de Router.
+        const corpo = $('.ficha-corpo', card);
+        if (corpo) {
+          LOTE.itens[i].ficha = { tabelas: {}, soltas: {} };
+          corpo.innerHTML = htmlFichaSetor(LOTE.itens[i], i);
+          ligarFicha(corpo, m);
+        }
       }
     };
   });
@@ -912,6 +1199,8 @@ function abrirPreviaLote() {
     LOTE.itens[i][campo] = !LOTE.itens[i][campo];
     ch.classList.toggle('marcado', LOTE.itens[i][campo]);
   });
+
+  ligarFicha(m, m);
   $$('[data-pdata]', m).forEach(el => el.oninput = () => {
     el.value = mascaraData(el.value);
     const iso = dataBrParaISO(el.value, '12:00');
@@ -940,10 +1229,21 @@ function abrirPreviaLote() {
   $('.btn-separados', m).onclick = () => { m.remove(); exportarLote(true); };
 }
 
+// prancha.js declara `const PRANCHA`: carregar duas vezes quebra a página
+// inteira ("PRANCHA already declared"). Este é o ÚNICO ponto que carrega o
+// arquivo, e ele é reaproveitado tanto pela prévia quanto pela exportação.
+let _pranchaScript = null;
+function ensureModelos() {
+  if (!_pranchaScript) _pranchaScript = carregarScript('prancha.js');
+  return _pranchaScript;
+}
+
 let _pranchaCarregada = null;
 function ensurePrancha() {
   if (!_pranchaCarregada) {
-    _pranchaCarregada = ensurePdfLibs().then(() => carregarScript('prancha.js'));
+    // A prévia já pode ter carregado prancha.js sozinha; ensureModelos
+    // devolve a mesma promessa em vez de baixar de novo.
+    _pranchaCarregada = ensurePdfLibs().then(() => ensureModelos());
   }
   return _pranchaCarregada;
 }
@@ -995,6 +1295,9 @@ async function salvarLoteNoBriefing(loteRecebido) {
     seloServico: p.seloServico, setor: p.setor || '', tituloServico: p.tituloServico,
     medidas: p.medidas, detalhe: p.detalhe || '', obs: p.obs,
     dataEntrega: p.dataEntrega || '', urgente: !!p.urgente, espelhado: !!p.espelhado,
+    // A ficha marcada faz parte da prancha: sem ela, regerar o PDF do histórico
+    // devolvia a folha em branco e perdia o que o designer preencheu.
+    ficha: p.ficha || null,
     imagemId: p.imagemId || null,
     cliente: p.cliente, contato: p.contato, vendedor: p.vendedor, designer: p.designer,
     osNumero: p.osNumero, endereco: p.endereco, data: p.data,
