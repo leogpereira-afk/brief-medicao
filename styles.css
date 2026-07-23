@@ -295,6 +295,22 @@ input:focus, select:focus, textarea:focus { outline: none; border-color: var(--i
 /* A lista de briefings não pode empurrar o resto da tela pra fora da vista */
 .lista-escolha.rolagem-curta { max-height: 210px; overflow-y: auto; margin-top: 8px; }
 
+/* ── Tela de Arquivos (visão do designer) ─────────────────────────────────── */
+.card-arquivos { margin-bottom: 12px; }
+.cabeca-arquivos {
+  display: flex; justify-content: space-between; align-items: flex-start;
+  gap: 10px; flex-wrap: wrap; margin-bottom: 10px;
+}
+.acoes-arquivos { display: flex; gap: 8px; align-items: center; flex-wrap: wrap; }
+.acoes-arquivos .botao { text-decoration: none; }
+/* O "+N" ocupa o lugar de uma miniatura, então tem que ter a mesma altura */
+.mais-fotos {
+  width: 100%; height: 110px; border: 1.5px dashed var(--borda); border-radius: 10px;
+  background: var(--indigo-8); color: var(--indigo); cursor: pointer;
+  font-family: 'Poppins'; font-weight: 600; font-size: 1rem;
+}
+.mais-fotos:hover { border-color: var(--indigo); }
+
 /* ── Ficha do setor (checklist clicável da prancha) ────────────────────────── */
 .ficha-setor { border: 1px solid var(--borda); border-radius: 10px; margin-bottom: 10px; background: #fff; }
 .ficha-setor > summary {
@@ -393,6 +409,7 @@ input:focus, select:focus, textarea:focus { outline: none; border-color: var(--i
 .badge.status-concluido { background: var(--ok-bg); color: var(--ok); }
 .badge.rascunho { background: #E5E7EB; color: #374151; }
 .badge.sem-os { background: var(--alerta-bg); color: var(--alerta); border: 1px dashed var(--alerta); }
+.badge.designer { background: var(--indigo-15); color: var(--indigo-escuro); }
 .badge.tipo-execucao { background: var(--perigo); color: #fff; }
 .badge.tipo-orcamento { background: var(--azul-bg); color: var(--azul); }
 .badge.neutro { background: var(--indigo-8); color: var(--indigo-escuro); }

@@ -303,7 +303,7 @@ const ITENS_RECOLHIDOS = new Set();
 // Itens da O.S. que o vendedor desmarcou na lista (senão voltavam marcados
 // a cada redesenho da tela).
 const OS_ITENS_DESMARCADOS = new Set();
-let FILTROS = { texto: '', os: '', de: '', ate: '', deBr: '', ateBr: '', status: '', vendedor: '', tipo: '', semOS: false };
+let FILTROS = { texto: '', os: '', de: '', ate: '', deBr: '', ateBr: '', status: '', vendedor: '', tipo: '', semOS: false, meus: false };
 let SYNC_ESTADO = { status: 'ok', pendentes: 0 };
 // Ligado enquanto o botão de sincronizar do topo está rodando.
 let _sincronizando = false;
@@ -381,6 +381,7 @@ function lerRota() {
   else if (partes[0] === 'b') ROTA = { nome: 'detalhe', id: partes[1], aba: partes[2] || 'dados' };
   else if (partes[0] === 'admin') ROTA = { nome: 'admin', aba: partes[1] || 'usuarios' };
   else if (partes[0] === 'layout') ROTA = { nome: 'layout', modo: partes[1] || '', id: partes[2] || '' };
+  else if (h === 'arquivos') ROTA = { nome: 'arquivos' };
   else ROTA = { nome: 'lista' };
 }
 
@@ -409,6 +410,7 @@ function htmlTopo(tituloTela) {
     '<nav class="nav-desktop">' +
     '<a href="#/lista" class="' + (ROTA.nome === 'lista' ? 'ativo' : '') + '">Briefings</a>' +
     (podeCriar() ? '<a href="#/novo">+ Novo</a>' : '') +
+    (podeVerArquivos() ? '<a href="#/arquivos" class="' + (ROTA.nome === 'arquivos' ? 'ativo' : '') + '">Arquivos</a>' : '') +
     (podeUsarLayout() ? '<a href="#/layout" class="' + (ROTA.nome === 'layout' ? 'ativo' : '') + '">Gerador de layout</a>' : '') +
     (SESSAO && SESSAO.papel === 'admin' ? '<a href="#/admin" class="' + (ROTA.nome === 'admin' ? 'ativo' : '') + '">Painel de controle</a>' : '') +
     '<a href="#" id="link-sair-desktop">Sair</a>' +
@@ -474,6 +476,7 @@ function abrirMenu() {
     '<div class="papel">Perfil: ' + esc(SESSAO.papel) + '</div>' +
     '<a href="#/lista">📋 Briefings</a>' +
     (podeCriar() ? '<a href="#/novo">➕ Novo briefing</a>' : '') +
+    (podeVerArquivos() ? '<a href="#/arquivos">🖼 Arquivos</a>' : '') +
     (podeUsarLayout() ? '<a href="#/layout">🗂 Gerador de layout</a>' : '') +
     (SESSAO.papel === 'admin' ? '<a href="#/admin">🛠 Painel de controle</a>' : '') +
     '<a href="#/">🏠 Tela inicial</a>' +
@@ -506,6 +509,7 @@ function renderApp() {
   switch (ROTA.nome) {
     case 'inicio': return renderInicio(app);
     case 'layout': return renderLayout(app);
+    case 'arquivos': return renderArquivos(app);
     case 'login': return renderLogin(app);
     case 'novo': return criarNovo();
     case 'editor': return renderEditor(app);
@@ -1527,6 +1531,8 @@ function filtrarLista(lista) {
     if (FILTROS.vendedor && b.vendedor !== FILTROS.vendedor) return false;
     if (FILTROS.tipo && b.tipoMedicao !== FILTROS.tipo) return false;
     if (FILTROS.semOS && String(b.osNumero || '').trim()) return false;
+    // "Só os meus": o designer vê o que foi direcionado pra ele
+    if (FILTROS.meus && !(b.designerAtribuido && b.designerAtribuido.usuario === SESSAO.usuario)) return false;
     return true;
   });
 }
@@ -1556,6 +1562,10 @@ function renderLista(app) {
     ['Orçamento', 'Execução'].map(v => '<option ' + (FILTROS.tipo === v ? 'selected' : '') + '>' + v + '</option>').join('') + '</select></div>' +
     '<div class="campo" style="margin:0"><label>&nbsp;</label>' +
     '<button id="f-semos" class="chip ' + (FILTROS.semOS ? 'marcado' : '') + '" style="width:100%; min-height:48px">Só sem O.S.</button></div>' +
+    (SESSAO.papel === 'designer'
+      ? '<div class="campo" style="margin:0"><label>&nbsp;</label>' +
+        '<button id="f-meus" class="chip ' + (FILTROS.meus ? 'marcado' : '') + '" style="width:100%; min-height:48px">🎨 Só os meus</button></div>'
+      : '') +
     '</div>' +
     '<div style="display:flex; gap:8px; grid-column: 1 / -1;">' +
     '<button class="botao suave mini" id="f-limpar">Limpar filtros</button>' +
@@ -1587,7 +1597,8 @@ function renderLista(app) {
   const fv = $('#f-vendedor'); if (fv) fv.onchange = e => { FILTROS.vendedor = e.target.value; rerenderCards(); };
   $('#f-tipo').onchange = e => { FILTROS.tipo = e.target.value; rerenderCards(); };
   $('#f-semos').onclick = e => { FILTROS.semOS = !FILTROS.semOS; e.target.classList.toggle('marcado', FILTROS.semOS); rerenderCards(); };
-  $('#f-limpar').onclick = () => { FILTROS = { texto: '', os: '', de: '', ate: '', deBr: '', ateBr: '', status: '', vendedor: '', tipo: '', semOS: false }; renderApp(); };
+  const fm = $('#f-meus'); if (fm) fm.onclick = e => { FILTROS.meus = !FILTROS.meus; e.target.classList.toggle('marcado', FILTROS.meus); rerenderCards(); };
+  $('#f-limpar').onclick = () => { FILTROS = { texto: '', os: '', de: '', ate: '', deBr: '', ateBr: '', status: '', vendedor: '', tipo: '', semOS: false, meus: false }; renderApp(); };
   $('#btn-ficha-branco').onclick = () => exportarFichaVisita(null);
   const fab = $('#fab-novo'); if (fab) fab.onclick = () => { location.hash = '#/novo'; };
   ligarCards();
@@ -1610,6 +1621,8 @@ function htmlCards(lista) {
       (rascunho ? '<span class="badge rascunho">RASCUNHO</span>' : badgeStatus(b.status)) +
       (b.tipoMedicao ? '<span class="badge ' + (b.tipoMedicao === 'Execução' ? 'tipo-execucao' : 'tipo-orcamento') + '">' + esc(b.tipoMedicao) + '</span>' : '') +
       (String(b.osNumero || '').trim() ? '<span class="badge neutro">O.S. ' + esc(b.osNumero) + '</span>' : '<span class="badge sem-os">SEM O.S.</span>') +
+      // Pra quem foi direcionado (só faz sentido depois de enviado)
+      (!rascunho && b.designerAtribuido ? '<span class="badge designer">🎨 ' + esc(b.designerAtribuido.nome) + '</span>' : '') +
       '</div></div>' +
       '</button>'
     );
@@ -2561,10 +2574,54 @@ function abrirConcluirVisita() {
   };
 }
 
+// Designers ativos do time (a lista de usuários sincroniza no CFG).
+function designersAtivos() {
+  return ((STORE.getCFG() || {}).usuarios || [])
+    .filter(u => u.papel === 'designer' && u.ativo !== false);
+}
+
+// Grava a atribuição no briefing, com o rastro de quem passou pra quem.
+// `b` pode ser o BRIEF em edição ou um briefing salvo (repasse no detalhe).
+function atribuirDesigner(b, designer) {
+  const antes = b.designerAtribuido ? b.designerAtribuido.nome : '';
+  b.designerAtribuido = designer ? { id: designer.id, nome: designer.nome, usuario: designer.usuario } : null;
+  b.atribuicoes = b.atribuicoes || [];
+  b.atribuicoes.push({
+    de: antes, para: designer ? designer.nome : '',
+    por: (SESSAO && SESSAO.nome) || '', em: new Date().toISOString()
+  });
+}
+
+// Escolha de designer. `atual` marca o que já está com o briefing;
+// aoEscolher recebe o usuário escolhido (ou null pra "qualquer um").
+function abrirEscolhaDesigner(titulo, atual, aoEscolher) {
+  const lista = designersAtivos();
+  const m = abrirModal(
+    '<h3>' + esc(titulo) + '</h3>' +
+    '<p class="dica-campo">O briefing aparece pra todos, mas fica marcado com quem vai cuidar dele.</p>' +
+    '<div class="lista-escolha" style="margin-top:10px">' +
+    lista.map(u =>
+      '<button class="opcao-briefing" data-designer="' + esc(u.id) + '">' +
+      '<b>' + esc(u.nome) + (atual && atual.id === u.id ? ' · já está com ele' : '') + '</b>' +
+      '<span class="dica-campo">' + esc(u.usuario) + '</span></button>').join('') +
+    '<button class="opcao-briefing" data-designer=""><b>Sem designer definido</b>' +
+    '<span class="dica-campo">qualquer um do design pega</span></button>' +
+    '</div>' +
+    '<div class="acoes-modal"><button class="botao fantasma btn-cancelar">Cancelar</button></div>'
+  );
+  $('.btn-cancelar', m).onclick = () => m.remove();
+  $$('[data-designer]', m).forEach(bt => bt.onclick = () => {
+    const u = lista.find(x => x.id === bt.dataset.designer) || null;
+    m.remove();
+    aoEscolher(u);
+  });
+}
+
 function enviarBriefing() {
   const p = pendencias(BRIEF);
   if (p.length) { toast('Ainda falta: ' + p[0], 'erro'); return; }
-  const concluir = () => {
+  const concluir = (designer) => {
+    if (designer !== undefined) atribuirDesigner(BRIEF, designer);
     BRIEF.situacao = 'enviado';
     BRIEF.status = BRIEF.tipoMedicao === 'Execução' ? 'Aprovado pra execução' : 'Aguardando orçamento';
     BRIEF.enviadoEm = new Date().toISOString();
@@ -2575,10 +2632,18 @@ function enviarBriefing() {
     toast('Briefing enviado pro design ✓ (sincroniza sozinho quando tiver sinal)', 'sucesso');
     location.hash = '#/b/' + id;
   };
+  // Com mais de um designer no time, o vendedor diz pra quem vai. Com um só
+  // (ou nenhum cadastrado), não há o que escolher -- segue direto.
+  const designers = designersAtivos();
+  const escolher = (depois) => {
+    if (designers.length > 1) abrirEscolhaDesigner('Enviar pra qual designer?', null, depois);
+    else depois(designers[0] || null);
+  };
   if (BRIEF.tipoMedicao === 'Execução') {
-    confirmar('Medição de execução', 'Estas medidas vão pra produção. <b>Conferiu duas vezes?</b>', 'Sim, enviar', concluir);
+    confirmar('Medição de execução', 'Estas medidas vão pra produção. <b>Conferiu duas vezes?</b>', 'Sim, enviar',
+      () => escolher(concluir));
   } else {
-    concluir();
+    escolher(concluir);
   }
 }
 
@@ -2629,6 +2694,23 @@ function renderDetalhe(app) {
     (podeGerir && b.situacao === 'enviado'
       ? '<div class="campo" style="margin-top:12px; max-width:340px"><label>Status</label><select id="sel-status">' +
         STATUS_LISTA.map(s => '<option ' + (b.status === s ? 'selected' : '') + '>' + esc(s) + '</option>').join('') + '</select></div>'
+      : '') +
+    // Com quem está o briefing. O repasse é entre os do design (e o admin).
+    (b.situacao === 'enviado'
+      ? '<div class="aviso ' + (b.designerAtribuido ? 'indigo' : 'amarelo') + '" style="margin-top:12px; display:flex; align-items:center; gap:10px; flex-wrap:wrap">' +
+        '<span>🎨 ' + (b.designerAtribuido
+          ? 'Com <b>' + esc(b.designerAtribuido.nome) + '</b>' +
+            (SESSAO.usuario && b.designerAtribuido.usuario === SESSAO.usuario ? ' (você)' : '')
+          : 'Sem designer definido — qualquer um do design pega') + '</span>' +
+        (podeGerir ? '<button class="botao mini suave" id="btn-repassar">' +
+          (b.designerAtribuido ? 'Direcionar pra outro' : 'Assumir ou direcionar') + '</button>' : '') +
+        '</div>' +
+        ((b.atribuicoes || []).length > 1
+          ? '<div class="dica-campo" style="margin-top:6px">' +
+            b.atribuicoes.slice(1).map(a =>
+              esc(a.por) + ' passou de ' + esc(a.de || '—') + ' pra ' + esc(a.para || 'sem designer') +
+              ' em ' + fmtDataHora(a.em)).join('<br>') + '</div>'
+          : '')
       : '') +
     '</div>' +
 
@@ -2752,13 +2834,32 @@ function renderDetalhe(app) {
     });
   }
 
+  // Repasse entre designers: grava direto no briefing salvo e sincroniza.
+  const rep = $('#btn-repassar');
+  if (rep) rep.onclick = () => abrirEscolhaDesigner(
+    'Direcionar pra qual designer?', b.designerAtribuido,
+    (u) => {
+      atribuirDesigner(b, u);
+      STORE.saveOS(b);
+      renderApp();
+      toast(u ? 'Briefing direcionado pra ' + u.nome + ' ✓' : 'Briefing liberado pra qualquer designer ✓', 'sucesso');
+    });
+
   // Ações
   $('#btn-pdf-brief').onclick = () => exportarPdfBriefing(b);
   $('#btn-ficha-det').onclick = () => exportarFichaVisita(b);
   $('#btn-baixar-fotos').onclick = () => baixarFotosDoBriefing(b);
   const bp = $('#btn-gerar-prancha');
   if (bp) bp.onclick = () => {
-    PROD = { briefingId: b.id, setores: [], busca: '' };
+    // `_aberto: true` é obrigatório: sem ele a tela de produção entende que
+    // está sendo aberta do zero e zera o rascunho -- levando embora o briefing
+    // que este botão acabou de escolher.
+    PROD = Object.assign({}, PROD_VAZIO, {
+      briefingId: b.id,
+      osNumero: String(b.osNumero || '').trim(),
+      mostrarBrief: true,
+      _aberto: true
+    });
     location.hash = '#/layout/producao';
   };
   $$('[data-regerar]').forEach(bt => bt.onclick = () => {
@@ -3249,6 +3350,123 @@ function ensurePdfLibs() {
     proximo();
   });
   return _pdfCarregado;
+}
+
+/* ══════════════════ Tela de Arquivos (visão do designer) ══════════════════ */
+
+// Quem vê a tela de arquivos. Mesma regra do gerador de layout: é ferramenta de
+// design, não do vendedor na rua.
+function podeVerArquivos() {
+  return SESSAO && (SESSAO.papel === 'designer' || SESSAO.papel === 'admin');
+}
+
+let ARQ = { busca: '', limite: 8 };
+
+// Todas as fotos vivas do briefing (itens + croquis), já com a legenda que vai
+// aparecer no visualizador.
+function fotosDoBriefing(b) {
+  const out = [];
+  (b.itens || []).forEach((it, i) => {
+    (it.fotos || []).forEach(f => {
+      if (f.arquivada) return;
+      const def = FOTOS_ITEM.find(d => d.tipo === f.tipo);
+      out.push({ id: f.id, legenda: (nomeItem(it) || 'Item ' + pad2(i + 1)) + ' · ' + (def ? def.rotulo : f.tipo) });
+    });
+  });
+  (b.croquis || []).forEach((c, ci) => {
+    if (!c.arquivada) out.push({ id: c.id, legenda: 'Desenho da visita ' + pad2(ci + 1) });
+  });
+  return out;
+}
+
+const ARQ_POR_CARTAO = 6;   // miniaturas por briefing; o resto vira "+N"
+
+function renderArquivos(app) {
+  if (!podeVerArquivos()) { toast('A tela de arquivos é da área do designer', 'erro'); location.hash = '#/lista'; return; }
+  document.title = 'Arquivos';
+
+  // Só briefing com a visita fechada: antes disso as fotos ainda estão mudando
+  // e baixar arquivo pela metade só gera retrabalho.
+  const prontos = STORE.getAllOS()
+    .filter(x => x && !x.apagadoEm && !x.avulsa && (x.situacao === 'enviado' || x.visitaConcluida))
+    .filter(x => {
+      const t = norm(ARQ.busca);
+      if (!t) return true;
+      return norm((x.cliente || '') + ' ' + (x.osNumero || '') + ' ' +
+        (x.numeroBrief ? padBrief(x.numeroBrief) : '') + ' ' + fmtData(x.dataHora)).includes(t);
+    })
+    .sort((a, z) => String(z.dataHora || '').localeCompare(String(a.dataHora || '')));
+
+  const visiveis = prontos.slice(0, ARQ.limite);
+
+  app.innerHTML =
+    htmlTopo('Arquivos') +
+    '<main class="miolo">' +
+    '<div class="card">' +
+    '<p class="dica-campo" style="margin-bottom:10px">As fotos e desenhos de cada visita, prontos pra baixar. Toque numa foto pra ver grande.</p>' +
+    '<div class="campo"><input id="arq-busca" type="text" placeholder="Cliente, O.S., Nº do brief ou data" value="' + esc(ARQ.busca) + '"></div>' +
+    '</div>' +
+
+    (visiveis.length
+      ? visiveis.map(b => {
+          const fotos = fotosDoBriefing(b);
+          const mostra = fotos.slice(0, ARQ_POR_CARTAO);
+          const sobra = fotos.length - mostra.length;
+          return '<div class="card card-arquivos" data-arq="' + esc(b.id) + '">' +
+            '<div class="cabeca-arquivos">' +
+            '<div><b class="fonte-titulo">' + esc(b.cliente || 'Sem nome') + '</b>' +
+            '<div class="dica-campo">' +
+            (b.numeroBrief ? 'Nº ' + padBrief(b.numeroBrief) + ' · ' : '') +
+            (String(b.osNumero || '').trim() ? 'O.S. ' + esc(b.osNumero) : 'sem O.S.') +
+            ' · ' + fmtData(b.dataHora) +
+            ' · ' + (fotos.length ? fotos.length + ' arquivo(s)' : 'sem fotos') +
+            '</div></div>' +
+            '<div class="acoes-arquivos">' +
+            '<a class="botao mini fantasma" href="#/b/' + esc(b.id) + '">Abrir briefing</a>' +
+            (fotos.length ? '<button class="botao mini" data-zip="' + esc(b.id) + '">⬇ Baixar tudo</button>' : '') +
+            '</div></div>' +
+            (fotos.length
+              ? '<div class="grade-galeria" data-galeria-arq="' + esc(b.id) + '">' +
+                mostra.map(f =>
+                  '<figure><img data-foto-id="' + esc(f.id) + '" alt="' + esc(f.legenda) + '">' +
+                  '<figcaption>' + esc(f.legenda) + '</figcaption></figure>').join('') +
+                (sobra > 0
+                  ? '<figure><button class="mais-fotos" data-mais="' + esc(b.id) + '">+' + sobra + '</button>' +
+                    '<figcaption>ver todas</figcaption></figure>'
+                  : '') +
+                '</div>'
+              : '<p class="dica-campo">As fotos deste briefing ainda não sincronizaram neste aparelho.</p>') +
+            '</div>';
+        }).join('') +
+        (prontos.length > visiveis.length
+          ? '<button class="botao largo suave" id="arq-mais">Mostrar mais ' +
+            Math.min(8, prontos.length - visiveis.length) + ' de ' + (prontos.length - visiveis.length) + '</button>'
+          : '')
+      : '<div class="vazio">' + (ARQ.busca ? 'Nada encontrado com esse texto.' : 'Nenhuma visita concluída ainda.') + '</div>') +
+    '</main>';
+
+  ligarTopo();
+  $('#arq-busca').oninput = debounce(e => { ARQ.busca = e.target.value; ARQ.limite = 8; renderApp(); }, 300);
+  const mais = $('#arq-mais');
+  if (mais) mais.onclick = () => { ARQ.limite += 8; renderApp(); };
+
+  // Miniaturas: cada uma busca a sua foto e abre o visualizador com a galeria
+  // INTEIRA do briefing (não só as 6 que estão à vista).
+  visiveis.forEach(b => {
+    const cont = $('[data-galeria-arq="' + b.id + '"]');
+    if (!cont) return;
+    const fotos = fotosDoBriefing(b);
+    $$('img[data-foto-id]', cont).forEach(img => {
+      STORE.pullPhoto(img.dataset.fotoId).then(b64 => { if (b64) img.src = b64; });
+      img.onclick = () => abrirLightbox(fotos, fotos.findIndex(x => x.id === img.dataset.fotoId));
+    });
+    const bt = $('[data-mais="' + b.id + '"]', cont);
+    if (bt) bt.onclick = () => abrirLightbox(fotos, ARQ_POR_CARTAO);
+  });
+  $$('[data-zip]').forEach(bt => bt.onclick = () => {
+    const b = STORE.getOS(bt.dataset.zip);
+    if (b) baixarFotosDoBriefing(b);
+  });
 }
 
 /* ══════════════════ Arquivos das fotos (para o designer) ══════════════════ */

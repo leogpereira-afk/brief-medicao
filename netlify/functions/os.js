@@ -228,6 +228,10 @@ exports.handler = async (event, context) => {
             osNumero: toSave.osNumero || '',
             semOS: !toSave.osNumero,
             qtdItens: (toSave.itens || []).length,
+            // Pra quem o vendedor direcionou. Sem isto o aviso chega pra equipe
+            // inteira sem dizer de quem é o trabalho.
+            designer: (toSave.designerAtribuido && toSave.designerAtribuido.nome) || '',
+            designerUsuario: (toSave.designerAtribuido && toSave.designerAtribuido.usuario) || '',
             url: base ? base + '/#/b/' + toSave.id : '',
             em: new Date().toISOString()
           });
