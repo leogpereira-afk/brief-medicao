@@ -303,10 +303,21 @@ const ITENS_RECOLHIDOS = new Set();
 // Itens da O.S. que o vendedor desmarcou na lista (senão voltavam marcados
 // a cada redesenho da tela).
 const OS_ITENS_DESMARCADOS = new Set();
-let FILTROS = { texto: '', os: '', de: '', ate: '', deBr: '', ateBr: '', status: '', vendedor: '', tipo: '', semOS: false, meus: false };
+function filtrosZerados() {
+  return { texto: '', os: '', de: '', ate: '', deBr: '', ateBr: '', status: '', vendedor: '', tipo: '', semOS: false, meus: false, semDesigner: false };
+}
+let FILTROS = filtrosZerados();
+// Há algum filtro além da busca por nome? Decide se "Mais filtros" abre sozinho.
+function filtrosExtraAtivos() {
+  return !!(FILTROS.os || FILTROS.de || FILTROS.ate || FILTROS.status || FILTROS.vendedor ||
+    FILTROS.tipo || FILTROS.semOS || FILTROS.meus || FILTROS.semDesigner);
+}
 let SYNC_ESTADO = { status: 'ok', pendentes: 0 };
 // Ligado enquanto o botão de sincronizar do topo está rodando.
 let _sincronizando = false;
+// Etapa e briefing do último desenho do editor: pra decidir se sobe pro topo.
+let _ultimaEtapaRender = 0;
+let _ultimoBriefRender = '';
 
 function ehDesktop() { return window.matchMedia('(min-width: 900px)').matches; }
 
@@ -1470,8 +1481,12 @@ function salvarRascunho(imediato) {
   const gravar = () => {
     _salvarPendente = false;
     STORE.saveOS(JSON.parse(JSON.stringify(BRIEF)));
+    const hora = new Date();
+    const hhmm = pad2(hora.getHours()) + ':' + pad2(hora.getMinutes());
     const s = $('#salvo-info');
-    if (s) s.textContent = 'Salvo automaticamente';
+    if (s) s.textContent = 'Salvo automaticamente · ' + hhmm;
+    const r = $('#salvo-rodape');
+    if (r) r.textContent = '✓ Salvo às ' + hhmm;
   };
   if (imediato) gravar();
   else { _salvarPendente = true; _timerSalvar = setTimeout(gravar, 600); }
@@ -1487,27 +1502,32 @@ function flushSalvar() {
   STORE.saveOS(JSON.parse(JSON.stringify(BRIEF)));
 }
 
+// Cada pendência sabe pra QUAL etapa (e item) ela leva, pra virar um atalho na
+// etapa 6. `.texto` mantém a compatibilidade com quem só quer a frase.
 function pendencias(b) {
   const p = [];
-  if (!String(b.cliente || '').trim()) p.push('Nome do cliente');
-  if (!String(b.telefone || '').trim()) p.push('Telefone do cliente');
-  if (!b.tipoMedicao) p.push('Tipo de medição (Orçamento ou Execução)');
-  if (!(b.itens || []).length) p.push('Pelo menos um item medido');
-  if (!b.visitaConcluida) p.push('Marcar "Visita concluída" na etapa 4');
+  const add = (texto, etapa, itemId) => p.push({ texto, etapa, itemId: itemId || null });
+  if (!String(b.cliente || '').trim()) add('Nome do cliente', 2);
+  if (!String(b.telefone || '').trim()) add('Telefone do cliente', 2);
+  if (!b.tipoMedicao) add('Tipo de medição (Orçamento ou Execução)', 2);
+  if (!(b.itens || []).length) add('Pelo menos um item medido', 4);
+  if (!b.visitaConcluida) add('Marcar "Visita concluída" na etapa 4', 4);
   const cfg = STORE.getCFG();
   (b.itens || []).forEach((it, i) => {
     const n = 'Item ' + (i + 1) + (nomeItem(it) ? ' (' + nomeItem(it) + ')' : '');
-    if (!nomeItem(it)) p.push(n + ': nome do item');
-    if (!temMedida(it)) p.push(n + ': largura e altura');
+    if (!nomeItem(it)) add(n + ': nome do item', 4, it.id);
+    if (!temMedida(it)) add(n + ': largura e altura', 4, it.id);
     fotosObrigatoriasDo(it, cfg).forEach(t => {
       if (!(it.fotos || []).some(x => x.tipo === t && !x.arquivada)) {
         const def = FOTOS_ITEM.find(f => f.tipo === t);
-        p.push(n + ': foto ' + (def ? def.rotulo.toLowerCase() : t));
+        add(n + ': foto ' + (def ? def.rotulo.toLowerCase() : t), 4, it.id);
       }
     });
   });
   return p;
 }
+// Só as frases, pros lugares que não vão pular pra etapa nenhuma.
+function pendenciasTexto(b) { return pendencias(b).map(x => x.texto); }
 
 /* ══════════════════ Lista ══════════════════ */
 
@@ -1534,8 +1554,11 @@ function filtrarLista(lista) {
     const dia = diaLocal(b.dataHora || b.criadoEm);
     if (FILTROS.de && dia < FILTROS.de) return false;
     if (FILTROS.ate && dia > FILTROS.ate) return false;
-    if (FILTROS.status && b.status !== FILTROS.status) return false;
+    if (FILTROS.status === '__rascunho__') { if (b.situacao === 'enviado') return false; }
+    else if (FILTROS.status && b.status !== FILTROS.status) return false;
     if (FILTROS.vendedor && b.vendedor !== FILTROS.vendedor) return false;
+    // "Sem designer": enviado e ainda sem ninguém direcionado
+    if (FILTROS.semDesigner && !(b.situacao === 'enviado' && !b.designerAtribuido)) return false;
     if (FILTROS.tipo && b.tipoMedicao !== FILTROS.tipo) return false;
     if (FILTROS.semOS && String(b.osNumero || '').trim()) return false;
     // "Só os meus": o designer vê o que foi direcionado pra ele
@@ -1553,13 +1576,20 @@ function renderLista(app) {
   app.innerHTML =
     htmlTopo('Briefings') +
     '<main class="miolo">' +
-    '<div class="card"><div class="filtros">' +
-    '<div class="campo" style="margin:0"><label>Buscar cliente</label><input id="f-texto" type="search" placeholder="Parte do nome já encontra" value="' + esc(FILTROS.texto) + '"></div>' +
+    // "Buscar cliente" fica sempre à vista; o resto se recolhe no celular atrás
+    // de "Mais filtros", pra lista não abrir escondida atrás de 8 campos.
+    // No desktop o CSS mantém tudo aberto.
+    '<div class="card"><div class="campo" style="margin:0 0 10px"><label>Buscar cliente</label>' +
+    '<input id="f-texto" type="search" placeholder="Parte do nome já encontra" value="' + esc(FILTROS.texto) + '"></div>' +
+    '<details class="filtros-extra"' + (filtrosExtraAtivos() ? ' open' : '') + '>' +
+    '<summary>Mais filtros' + (filtrosExtraAtivos() ? ' · ativos' : '') + '</summary>' +
+    '<div class="filtros">' +
     '<div class="campo" style="margin:0"><label>Número da O.S.</label><input id="f-os" type="text" inputmode="numeric" value="' + esc(FILTROS.os) + '"></div>' +
     '<div class="campo" style="margin:0"><label>De</label><input id="f-de" type="text" inputmode="numeric" maxlength="10" placeholder="dd/mm/aaaa" value="' + esc(FILTROS.deBr || '') + '"></div>' +
     '<div class="campo" style="margin:0"><label>Até</label><input id="f-ate" type="text" inputmode="numeric" maxlength="10" placeholder="dd/mm/aaaa" value="' + esc(FILTROS.ateBr || '') + '"></div>' +
     '<div class="linha-filtros">' +
     '<div class="campo" style="margin:0"><label>Status</label><select id="f-status"><option value="">Todos</option>' +
+    '<option value="__rascunho__"' + (FILTROS.status === '__rascunho__' ? ' selected' : '') + '>Rascunho (não enviado)</option>' +
     STATUS_LISTA.map(s => '<option ' + (FILTROS.status === s ? 'selected' : '') + '>' + esc(s) + '</option>').join('') + '</select></div>' +
     (SESSAO.papel !== 'vendedor'
       ? '<div class="campo" style="margin:0"><label>Vendedor</label><select id="f-vendedor"><option value="">Todos</option>' +
@@ -1571,21 +1601,30 @@ function renderLista(app) {
     '<button id="f-semos" class="chip ' + (FILTROS.semOS ? 'marcado' : '') + '" style="width:100%; min-height:48px">Só sem O.S.</button></div>' +
     (SESSAO.papel === 'designer'
       ? '<div class="campo" style="margin:0"><label>&nbsp;</label>' +
+        '<button id="f-semdesigner" class="chip ' + (FILTROS.semDesigner ? 'marcado' : '') + '" style="width:100%; min-height:48px">🙋 Sem designer</button></div>' +
+        '<div class="campo" style="margin:0"><label>&nbsp;</label>' +
         '<button id="f-meus" class="chip ' + (FILTROS.meus ? 'marcado' : '') + '" style="width:100%; min-height:48px">🎨 Só os meus</button></div>'
       : '') +
-    '</div>' +
-    '<div style="display:flex; gap:8px; grid-column: 1 / -1;">' +
+    '</div></details>' +
+    '<div style="display:flex; gap:8px; flex-wrap:wrap; margin-top:12px;">' +
     '<button class="botao suave mini" id="f-limpar">Limpar filtros</button>' +
     '<button class="botao fantasma mini" id="btn-ficha-branco">🖨 Ficha de visita em branco</button>' +
-    '<span class="salvo-info" style="margin-left:auto; align-self:center">' + filtrados.length + ' de ' + todos.length + '</span>' +
+    '<span class="salvo-info" id="lista-contagem" style="margin-left:auto; align-self:center">' + filtrados.length + ' de ' + todos.length + '</span>' +
     '</div>' +
-    '</div></div>' +
+    '</div>' +
     '<div id="lista-cards">' + htmlCards(filtrados) + '</div>' +
     '</main>' +
     (podeCriar() ? '<button class="fab" id="fab-novo">➕ Novo briefing</button>' : '');
 
   ligarTopo();
-  const rerenderCards = () => { $('#lista-cards').innerHTML = htmlCards(filtrarLista(visiveisPraSessao()).sort((a, z) => String(z.dataHora || z.criadoEm).localeCompare(String(a.dataHora || a.criadoEm)))); ligarCards(); };
+  const rerenderCards = () => {
+    const todosAgora = visiveisPraSessao();
+    const filt = filtrarLista(todosAgora).sort((a, z) => String(z.dataHora || z.criadoEm).localeCompare(String(a.dataHora || a.criadoEm)));
+    $('#lista-cards').innerHTML = htmlCards(filt);
+    // A contagem acompanha o filtro (antes ficava "48 de 48" fixo).
+    const cont = $('#lista-contagem'); if (cont) cont.textContent = filt.length + ' de ' + todosAgora.length;
+    ligarCards();
+  };
   $('#f-texto').oninput = debounce(e => { FILTROS.texto = e.target.value; rerenderCards(); }, 250);
   $('#f-os').oninput = debounce(e => { FILTROS.os = e.target.value; rerenderCards(); }, 250);
   $('#f-de').oninput = e => {
@@ -1605,14 +1644,23 @@ function renderLista(app) {
   $('#f-tipo').onchange = e => { FILTROS.tipo = e.target.value; rerenderCards(); };
   $('#f-semos').onclick = e => { FILTROS.semOS = !FILTROS.semOS; e.target.classList.toggle('marcado', FILTROS.semOS); rerenderCards(); };
   const fm = $('#f-meus'); if (fm) fm.onclick = e => { FILTROS.meus = !FILTROS.meus; e.target.classList.toggle('marcado', FILTROS.meus); rerenderCards(); };
-  $('#f-limpar').onclick = () => { FILTROS = { texto: '', os: '', de: '', ate: '', deBr: '', ateBr: '', status: '', vendedor: '', tipo: '', semOS: false, meus: false }; renderApp(); };
+  const fsd = $('#f-semdesigner'); if (fsd) fsd.onclick = e => { FILTROS.semDesigner = !FILTROS.semDesigner; e.target.classList.toggle('marcado', FILTROS.semDesigner); rerenderCards(); };
+  $('#f-limpar').onclick = () => { FILTROS = filtrosZerados(); renderApp(); };
   $('#btn-ficha-branco').onclick = () => exportarFichaVisita(null);
   const fab = $('#fab-novo'); if (fab) fab.onclick = () => { location.hash = '#/novo'; };
+  // No desktop os filtros ficam sempre abertos (o resumo só existe no celular).
+  const fx = $('.filtros-extra'); if (fx && ehDesktop()) fx.open = true;
   ligarCards();
 }
 
 function htmlCards(lista) {
   if (!lista.length) {
+    // Distingue "você não tem nenhum" de "o filtro escondeu tudo".
+    const temFiltro = FILTROS.texto || filtrosExtraAtivos();
+    if (temFiltro) {
+      return '<div class="vazio"><div class="icone">🔍</div>Nenhum briefing com esse recorte.' +
+        '<br><button class="botao suave mini" id="vazio-limpar" style="margin-top:12px">Limpar filtros</button></div>';
+    }
     return '<div class="vazio"><div class="icone">📭</div>Nenhum briefing por aqui ainda.' +
       (podeCriar() ? '<br>Toque em "Novo briefing" pra começar.' : '') + '</div>';
   }
@@ -1647,6 +1695,9 @@ function ligarCards() {
       else location.hash = '#/b/' + id;
     };
   });
+  // Botão do estado vazio "com filtro": limpa e redesenha.
+  const vl = $('#vazio-limpar');
+  if (vl) vl.onclick = () => { FILTROS = filtrosZerados(); renderApp(); };
 }
 
 /* ══════════════════ Editor (wizard) ══════════════════ */
@@ -1664,8 +1715,20 @@ function renderEditor(app) {
   const b = STORE.getOS(ROTA.id);
   if (!b) { toast('Briefing não encontrado neste aparelho', 'erro'); location.hash = '#/lista'; return; }
   if (b.situacao === 'enviado' && SESSAO.papel !== 'admin') { location.hash = '#/b/' + b.id; return; }
-  // Troca de briefing: estado de tela do anterior não vale mais
-  if (!BRIEF || BRIEF.id !== b.id) { ITENS_RECOLHIDOS.clear(); OS_ITENS_DESMARCADOS.clear(); }
+  // Troca de briefing: estado de tela do anterior não vale mais. Zera a ETAPA
+  // tambem -- senao o briefing NOVO abria na etapa em que o anterior parou
+  // (sempre a 6, a tela de erros de envio), obrigando a voltar 5 vezes.
+  if (!BRIEF || BRIEF.id !== b.id) {
+    ITENS_RECOLHIDOS.clear(); OS_ITENS_DESMARCADOS.clear();
+    ETAPA = 1;
+  }
+  // Guarda a rolagem: no celular, quase todo toque do editor (marcar superficie,
+  // tirar foto, adicionar ponto) redesenha a tela inteira. Se sempre subisse pro
+  // topo, o vendedor perdia o lugar dezenas de vezes por visita. Guardamos a
+  // posicao e so subimos quando a ETAPA realmente muda.
+  const rolagemAntes = window.scrollY;
+  const mesmaEtapa = _ultimaEtapaRender === ETAPA && _ultimoBriefRender === b.id;
+  _ultimaEtapaRender = ETAPA; _ultimoBriefRender = b.id;
   BRIEF = b;
   if (!BRIEF.obsGerais) BRIEF.obsGerais = novoBriefing().obsGerais;
   if (!BRIEF.croquis) BRIEF.croquis = [];
@@ -1686,6 +1749,9 @@ function renderEditor(app) {
     '</div></div></main>' +
     '<div class="rodape-wizard">' +
     '<button class="botao fantasma so-mobile" id="btn-voltar"' + (ETAPA === 1 ? ' disabled' : '') + '>← Voltar</button>' +
+    // Sem sinal o vendedor não tinha nenhuma confirmação de que gravou; agora a
+    // barra de baixo mostra "Salvo às HH:MM" (o desktop já mostrava na lateral).
+    '<span class="salvo-rodape" id="salvo-rodape"></span>' +
     (ETAPA < 6
       ? '<button class="botao so-mobile" id="btn-avancar">Avançar →</button>'
       : '') +
@@ -1697,7 +1763,12 @@ function renderEditor(app) {
   ligarTopo();
   ligarEditor(cfg);
   carregarThumbs();
-  if (!ehDesktop()) window.scrollTo(0, 0);
+  // So sobe pro topo quando a etapa mudou; senao devolve a rolagem que o
+  // usuario tinha, pra ele nao perder o lugar a cada chip marcado.
+  if (!ehDesktop()) {
+    if (mesmaEtapa) window.scrollTo(0, rolagemAntes);
+    else window.scrollTo(0, 0);
+  }
 }
 
 function mudarEtapa(n) {
@@ -1841,7 +1912,7 @@ function htmlEtapa4(cfg) {
     ).join('') +
     '<div class="slot-foto"><div class="rotulo">Novo desenho</div>' +
     '<button class="botao-foto" id="btn-add-croqui"><span class="icone">📷</span>Fotografar ficha</button>' +
-    '<input type="file" accept="image/*" capture="environment" id="input-croqui" hidden></div>' +
+    '<input type="file" accept="image/*" id="input-croqui" hidden></div>' +
     '</div></div>' +
     '</section>'
   );
@@ -1930,7 +2001,10 @@ function htmlItem(item, idx, cfg) {
             '<div class="acoes"><button class="botao mini suave" data-trocar-foto="' + def.tipo + '">Trocar</button>' +
             '<button class="botao mini perigo" data-remover-foto="' + def.tipo + '">✕</button></div>'
           : '<button class="botao-foto" data-tirar-foto="' + def.tipo + '"><span class="icone">📷</span>Tirar ou enviar</button>') +
-        '<input type="file" accept="image/*" capture="environment" data-input-foto="' + def.tipo + '" hidden>' +
+        // Sem capture: o celular pergunta "Câmera ou Galeria" -- que é o que o
+        // botão promete. Com capture, ia direto pra câmera e a foto que o
+        // cliente mandou no WhatsApp não tinha como entrar.
+        '<input type="file" accept="image/*" data-input-foto="' + def.tipo + '" hidden>' +
         '</div>'
       );
     }).join('') +
@@ -2088,9 +2162,15 @@ function htmlEtapa6() {
     (semOS ? '<div class="aviso amarelo">Este briefing vai SEM número de O.S. Dá pra vincular depois, não trava o envio.</div>' : '') +
     (BRIEF.tipoMedicao === 'Execução' ? '<div class="aviso vermelho">Medição de EXECUÇÃO: estas medidas vão pra produção. Confira duas vezes.</div>' : '') +
     (p.length
-      ? '<div class="aviso vermelho" style="font-weight:400"><b>Falta resolver antes de enviar:</b><ul class="pendencias">' + p.map(x => '<li>' + esc(x) + '</li>').join('') + '</ul></div>'
+      ? '<div class="aviso vermelho" style="font-weight:400"><b>Falta resolver antes de enviar:</b>' +
+        '<div class="pendencias">' + p.map((x, i) =>
+          '<button class="pend-atalho" data-pend="' + i + '" data-etapa="' + x.etapa + '"' +
+          (x.itemId ? ' data-item="' + esc(x.itemId) + '"' : '') + '>' +
+          '<span>' + esc(x.texto) + '</span><span class="ir">Ir →</span></button>').join('') + '</div></div>'
       : '<div class="aviso verde">Tudo certo pra enviar.</div>') +
-    '<button class="botao largo" id="btn-enviar" ' + (p.length ? 'disabled' : '') + '>📨 Enviar pro design</button>' +
+    // O botão NUNCA fica só apagado sem resposta: quando falta algo, ele leva
+    // ao primeiro pendente em vez de não fazer nada ao toque.
+    '<button class="botao largo" id="btn-enviar">📨 Enviar pro design</button>' +
     '<button class="botao largo fantasma" id="btn-descartar" style="margin-top:10px">Descartar rascunho</button>' +
     '</div></section>'
   );
@@ -2343,6 +2423,18 @@ function ligarEditor(cfg) {
   // Etapa 6
   const be = $('#btn-enviar');
   if (be) be.onclick = enviarBriefing;
+  // Cada pendência leva à etapa (e ao item) que falta, em vez de ser só texto.
+  $$('.pend-atalho').forEach(bt => bt.onclick = () => {
+    const etapa = Number(bt.dataset.etapa), itemId = bt.dataset.item;
+    if (itemId) ITENS_RECOLHIDOS.delete(itemId); // abre o item pra ele aparecer
+    ETAPA = etapa;
+    _ultimaEtapaRender = 0; // força subir/rolar no próximo desenho
+    renderApp();
+    if (itemId) setTimeout(() => {
+      const alvo = $('[data-item="' + (window.CSS && CSS.escape ? CSS.escape(itemId) : itemId) + '"]');
+      if (alvo) alvo.scrollIntoView({ behavior: 'smooth', block: 'center' });
+    }, 60);
+  });
   const bd = $('#btn-descartar');
   if (bd) bd.onclick = () => confirmar('Descartar rascunho',
     'O rascunho vai pra lixeira do admin e some da sua lista. Dá pra recuperar em até 30 dias.', 'Descartar', () => {
@@ -2388,8 +2480,16 @@ function ligarItem(cardEl, cfg) {
   const addPar = $('[data-add-par]', cardEl);
   if (addPar) addPar.onclick = () => { item.medidas.push({ largura: '', altura: '' }); salvarRascunho(true); renderApp(); };
   $$('[data-remover-par]', cardEl).forEach(bt => bt.onclick = () => {
-    item.medidas.splice(Number(bt.dataset.removerPar), 1);
-    salvarRascunho(true); renderApp();
+    const i = Number(bt.dataset.removerPar);
+    const par = item.medidas[i] || {};
+    const remover = () => { item.medidas.splice(i, 1); salvarRascunho(true); renderApp(); };
+    // So confirma quando ha medida escrita (polegar encosta no ✕ ao corrigir a
+    // altura). Ponto vazio some direto -- pedir confirmacao ali so atrapalha.
+    if (String(par.largura || '').trim() || String(par.altura || '').trim()) {
+      confirmar('Apagar este ponto?',
+        'Vai remover a medida <b>' + esc((par.largura || '?') + ' × ' + (par.altura || '?') + ' cm') + '</b>. Não dá pra desfazer.',
+        'Apagar', remover, true);
+    } else remover();
   });
 
   $$('[data-superficie]', cardEl).forEach(ch => ch.onclick = () => {
@@ -2626,7 +2726,20 @@ function abrirEscolhaDesigner(titulo, atual, aoEscolher) {
 
 function enviarBriefing() {
   const p = pendencias(BRIEF);
-  if (p.length) { toast('Ainda falta: ' + p[0], 'erro'); return; }
+  if (p.length) {
+    // Enviar com pendência não fica mudo: avisa e leva ao primeiro que falta.
+    const primeiro = p[0];
+    toast('Ainda falta: ' + primeiro.texto, 'erro');
+    if (primeiro.itemId) ITENS_RECOLHIDOS.delete(primeiro.itemId);
+    ETAPA = primeiro.etapa;
+    _ultimaEtapaRender = 0;
+    renderApp();
+    if (primeiro.itemId) setTimeout(() => {
+      const alvo = $('[data-item="' + (window.CSS && CSS.escape ? CSS.escape(primeiro.itemId) : primeiro.itemId) + '"]');
+      if (alvo) alvo.scrollIntoView({ behavior: 'smooth', block: 'center' });
+    }, 60);
+    return;
+  }
   const concluir = (designer) => {
     if (designer !== undefined) atribuirDesigner(BRIEF, designer);
     BRIEF.situacao = 'enviado';

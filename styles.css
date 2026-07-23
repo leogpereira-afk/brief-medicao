@@ -235,6 +235,11 @@ input:focus, select:focus, textarea:focus { outline: none; border-color: var(--i
 }
 .rodape-wizard .botao { flex: 1; }
 .salvo-info { font-size: .75rem; color: var(--cinza); font-family: 'Poppins'; }
+.salvo-rodape {
+  align-self: center; font-size: .8rem; font-family: 'Poppins'; font-weight: 600;
+  color: var(--ok, #1F9D6B); white-space: nowrap; order: -1; margin-right: auto;
+}
+@media (min-width: 900px){ .salvo-rodape { display: none; } }
 
 /* Sidebar desktop do editor */
 .editor-grade { display: block; }
@@ -413,6 +418,16 @@ input:focus, select:focus, textarea:focus { outline: none; border-color: var(--i
 /* ── Lista de briefings ───────────────────────────────────────────────────── */
 .filtros { display: grid; gap: 8px; grid-template-columns: 1fr; }
 .filtros .linha-filtros { display: grid; gap: 8px; grid-template-columns: 1fr 1fr; }
+/* "Mais filtros": some atrás de um resumo no celular; aberto sempre no desktop. */
+.filtros-extra > summary {
+  cursor: pointer; list-style: none; font-family: 'Poppins'; font-weight: 600;
+  font-size: .88rem; color: var(--indigo); padding: 8px 2px; display: inline-flex;
+  align-items: center; gap: 6px;
+}
+.filtros-extra > summary::-webkit-details-marker { display: none; }
+.filtros-extra > summary::before { content: '▸'; transition: transform .15s; }
+.filtros-extra[open] > summary::before { transform: rotate(90deg); }
+.filtros-extra > .filtros { margin-top: 8px; }
 .cartao-brief {
   background: var(--branco); border-radius: var(--raio); box-shadow: var(--sombra);
   border: 1px solid rgba(227,229,242,.7);
@@ -550,6 +565,16 @@ input:focus, select:focus, textarea:focus { outline: none; border-color: var(--i
 
 /* Revisão */
 .pendencias li { margin-left: 20px; color: var(--perigo); font-weight: 600; padding: 2px 0; }
+/* Cada pendência é um botão que leva ao que falta */
+.pendencias { display: flex; flex-direction: column; gap: 6px; margin-top: 8px; }
+.pend-atalho {
+  display: flex; align-items: center; justify-content: space-between; gap: 12px;
+  width: 100%; text-align: left; font-family: inherit; font-size: .9rem; font-weight: 600;
+  color: var(--perigo); background: rgba(255,255,255,.6); border: 1px solid var(--perigo);
+  border-radius: 10px; padding: 10px 12px; cursor: pointer; min-height: 44px;
+}
+.pend-atalho:hover { background: #fff; }
+.pend-atalho .ir { font-size: .8rem; font-weight: 700; white-space: nowrap; opacity: .85; }
 .resumo-item { border: 1px solid var(--borda); border-radius: 12px; padding: 12px; margin-bottom: 10px; }
 .mini-thumbs { display: flex; gap: 6px; margin-top: 8px; flex-wrap: wrap; }
 .mini-thumbs img { width: 62px; height: 62px; object-fit: cover; border-radius: 8px; background: var(--indigo-8); }
@@ -562,8 +587,11 @@ input:focus, select:focus, textarea:focus { outline: none; border-color: var(--i
   .miolo { padding: 24px 20px 60px; }
   .modal-fundo { align-items: center; padding: 20px; }
   .modal { border-radius: 18px; }
-  .filtros { grid-template-columns: 2fr 1fr 1fr 1fr; align-items: end; }
+  .filtros { grid-template-columns: 1fr 1fr 1fr; align-items: end; }
   .filtros .linha-filtros { grid-template-columns: repeat(4, minmax(130px, 1fr)); grid-column: 1 / -1; }
+  /* No desktop "Mais filtros" fica sempre aberto e sem o resumo clicável. */
+  .filtros-extra > summary { display: none; }
+  .filtros-extra > .filtros { margin-top: 0; }
   .grade-fotos { grid-template-columns: repeat(4, 1fr); }
   .editor-grade { display: grid; grid-template-columns: 230px 1fr; gap: 22px; align-items: start; }
   .sidebar-etapas { display: block; position: sticky; top: 86px; }
