@@ -62,7 +62,9 @@ exports.handler = async (event) => {
       const store = blobStore('integracoes');
       const atual = (await store.get('mubisys', { type: 'json' }).catch(() => null)) || {};
       const novo = {
-        publicKey: (body.publicKey != null ? String(body.publicKey).trim() : atual.publicKey) || '',
+        // Vazio significa "mantém o atual" (não apaga a chave). Sem isto, salvar
+        // o formulário em branco -- o que acontecia sem internet -- zerava tudo.
+        publicKey: (body.publicKey ? String(body.publicKey).trim() : atual.publicKey) || '',
         // Se o token vier vazio, mantém o que já estava (permite editar só a publicKey)
         accessToken: (body.accessToken ? String(body.accessToken).trim() : atual.accessToken) || '',
         base: (body.base ? String(body.base).trim() : atual.base) || '',

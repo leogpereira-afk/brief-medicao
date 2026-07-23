@@ -190,11 +190,16 @@ function toast(msg, tipo) {
   setTimeout(() => t.remove(), 3900);
 }
 
-function abrirModal(html) {
+function abrirModal(html, opcoes) {
   const fundo = document.createElement('div');
   fundo.className = 'modal-fundo';
   fundo.innerHTML = '<div class="modal">' + html + '</div>';
-  fundo.addEventListener('click', e => { if (e.target === fundo) fundo.remove(); });
+  // `persistente`: não fecha no toque fora. Usado em decisão obrigatória (ex.:
+  // conflito entre aparelhos) -- fechar sem escolher deixava o briefing travado
+  // sem sincronizar pra sempre.
+  if (!(opcoes && opcoes.persistente)) {
+    fundo.addEventListener('click', e => { if (e.target === fundo) fundo.remove(); });
+  }
   $('#overlays').appendChild(fundo);
   return fundo;
 }
@@ -342,18 +347,47 @@ STORE.onSync((status, pendentes) => {
   }
 });
 
+// Resumo em linguagem simples do que difere entre as duas versões, pro usuário
+// decidir sabendo o que perde. Conta itens, fotos e medidas dos dois lados.
+function resumoVersao(b) {
+  const itens = (b.itens || []).length;
+  const fotos = (b.itens || []).reduce((s, it) => s + (it.fotos || []).filter(f => !f.arquivada).length, 0);
+  const medidas = (b.itens || []).reduce((s, it) => s + (it.medidas || []).filter(m => m.largura || m.altura).length, 0);
+  return { itens, fotos, medidas };
+}
+
 STORE.onConflict((local, servidor) => {
+  const rl = resumoVersao(local), rs = resumoVersao(servidor);
+  const quem = (servidor && servidor.atualizadoPor) || 'outra pessoa';
+  const quando = servidor && servidor.atualizadoEm ? fmtDataHora(servidor.atualizadoEm) : '';
+  const localMaior = (rl.itens + rl.fotos + rl.medidas) > (rs.itens + rs.fotos + rs.medidas);
+  const linha = (r) => r.itens + ' item(ns) · ' + r.medidas + ' medida(s) · ' + r.fotos + ' foto(s)';
   const m = abrirModal(
     '<h3>Alterado em outro aparelho</h3>' +
-    '<p>O briefing de <b>' + esc((local && local.cliente) || 'cliente') + '</b> foi alterado em outro aparelho enquanto você editava aqui. Qual versão vale?</p>' +
+    '<p>O briefing de <b>' + esc((local && local.cliente) || 'cliente') + '</b> foi alterado por <b>' + esc(quem) + '</b>' +
+    (quando ? ' em ' + esc(quando) : '') + ' enquanto você editava aqui. Qual versão vale?</p>' +
+    '<div class="comparar-versoes">' +
+    '<div class="versao"><div class="rot">A SUA (aqui)</div><div class="dados">' + linha(rl) + '</div></div>' +
+    '<div class="versao"><div class="rot">A do outro aparelho</div><div class="dados">' + linha(rs) + '</div></div>' +
+    '</div>' +
+    (localMaior ? '<div class="aviso amarelo">A sua versão tem mais coisa. Usar a do outro aparelho apaga o que você mediu aqui.</div>' : '') +
     '<div class="acoes-modal">' +
-    '<button class="botao fantasma btn-serv">Usar a do outro aparelho</button>' +
-    '<button class="botao btn-minha">Manter a minha</button></div>'
+    '<button class="botao btn-minha">Manter a minha</button>' +
+    '<button class="botao fantasma btn-serv">Usar a do outro aparelho</button></div>',
+    { persistente: true } // decisão obrigatória: não fecha no toque fora
   );
   $('.btn-serv', m).onclick = () => {
-    STORE.aceitarServidor(servidor);
-    if (BRIEF && BRIEF.id === servidor.id) BRIEF = STORE.getOS(servidor.id);
-    m.remove(); renderApp(); toast('Versão do outro aparelho aplicada');
+    const aplicar = () => {
+      STORE.aceitarServidor(servidor);
+      if (BRIEF && BRIEF.id === servidor.id) BRIEF = STORE.getOS(servidor.id);
+      m.remove(); renderApp(); toast('Versão do outro aparelho aplicada');
+    };
+    // Segunda confirmação só quando há mesmo o que perder.
+    if (localMaior) {
+      confirmar('Apagar o que você mediu aqui?',
+        'A sua versão (' + linha(rl) + ') vai ser trocada pela do outro aparelho e <b>não dá pra desfazer</b>.',
+        'Sim, usar a do outro', aplicar, true);
+    } else aplicar();
   };
   $('.btn-minha', m).onclick = () => {
     STORE.sobrescreverServidor(local);
@@ -361,8 +395,11 @@ STORE.onConflict((local, servidor) => {
   };
 });
 
-STORE.on('quota', () => toast('Memória do aparelho cheia. Sincronize e limpe briefings antigos.', 'erro'));
-STORE.on('item-descartado', () => toast('Um item não conseguiu sincronizar e foi descartado. Confira os dados.', 'erro'));
+STORE.on('quota', () => toast('Memória do aparelho cheia — briefings novos podem não estar sendo salvos. Sincronize e apague briefings antigos.', 'erro'));
+STORE.on('item-descartado', (d) => {
+  const cli = d && d.item && d.item.os && d.item.os.cliente ? ' de ' + d.item.os.cliente : '';
+  toast('O briefing' + cli + ' não conseguiu subir pro design. Ele está marcado na lista com "NÃO SUBIU" — toque pra tentar de novo.', 'erro');
+});
 
 window.addEventListener('hashchange', () => { lerRota(); renderApp(); });
 
@@ -375,8 +412,44 @@ async function boot() {
   STORE.trySync();
   // Re-render depois do primeiro pull (listas e cfg fresquinhas)
   renderApp();
-  setInterval(() => { STORE.pull(() => { if (ROTA.nome === 'lista' || ROTA.nome === 'detalhe') renderApp(); }); }, 60000);
+  setInterval(() => { STORE.pull(atualizarPorSync); }, 60000);
 }
+
+// Chamado quando a sincronização de fundo traz novidade. Na LISTA, troca só os
+// cartões -- redesenhar a tela inteira (como antes) tirava o cursor da busca e
+// comia o que o designer estava digitando. No detalhe, redesenha só se não
+// houver um campo de texto em foco.
+function atualizarPorSync() {
+  // Se o briefing aberto no editor foi pra lixeira em outro aparelho, trava o
+  // editor -- senão o salvamento automático o traz de volta, e o log passa a
+  // culpar quem estava só digitando ("restaurou da lixeira").
+  if (ROTA.nome === 'editor' && BRIEF) {
+    const atual = STORE.getOS(BRIEF.id);
+    if (atual && atual.apagadoEm && !BRIEF.apagadoEm) {
+      _timerSalvar && clearTimeout(_timerSalvar);
+      _salvarPendente = false;
+      const quem = atual.apagadoPor ? ' por ' + atual.apagadoPor : '';
+      BRIEF = null; // impede autosave de ressuscitar
+      abrirModal('<h3>Este briefing foi movido pra lixeira</h3>' +
+        '<p>Alguém' + esc(quem) + ' moveu este briefing pra lixeira enquanto você editava. Suas alterações não valem mais.</p>' +
+        '<div class="acoes-modal"><button class="botao btn-ok">Entendi</button></div>');
+      const m = $('#overlays').lastElementChild;
+      if (m) $('.btn-ok', m).onclick = () => { m.remove(); location.hash = '#/lista'; };
+      return;
+    }
+  }
+  if (ROTA.nome === 'lista') {
+    if (typeof _refreshCards === 'function') _refreshCards();
+    return;
+  }
+  if (ROTA.nome === 'detalhe') {
+    const ativo = document.activeElement;
+    const digitando = ativo && /^(INPUT|TEXTAREA|SELECT)$/.test(ativo.tagName);
+    if (!digitando) renderApp();
+  }
+}
+// Atalho pra atualizar só os cartões da lista, sem mexer nos filtros.
+let _refreshCards = null;
 
 function lerRota() {
   const h = location.hash.replace(/^#\/?/, '');
@@ -1480,16 +1553,34 @@ function salvarRascunho(imediato) {
   clearTimeout(_timerSalvar);
   const gravar = () => {
     _salvarPendente = false;
-    STORE.saveOS(JSON.parse(JSON.stringify(BRIEF)));
+    if (!BRIEF) return true;
+    // Não ressuscita um briefing que outro aparelho mandou pra lixeira.
+    const armazenado = STORE.getOS(BRIEF.id);
+    if (armazenado && armazenado.apagadoEm && !BRIEF.apagadoEm) {
+      BRIEF = null;
+      toast('Este briefing foi movido pra lixeira em outro aparelho. Não dá pra salvar por cima.', 'erro');
+      if (ROTA.nome === 'editor') location.hash = '#/lista';
+      return false;
+    }
+    const ok = STORE.saveOS(JSON.parse(JSON.stringify(BRIEF)));
     const hora = new Date();
     const hhmm = pad2(hora.getHours()) + ':' + pad2(hora.getMinutes());
     const s = $('#salvo-info');
-    if (s) s.textContent = 'Salvo automaticamente · ' + hhmm;
     const r = $('#salvo-rodape');
-    if (r) r.textContent = '✓ Salvo às ' + hhmm;
+    if (ok) {
+      if (s) s.textContent = 'Salvo automaticamente · ' + hhmm;
+      if (r) { r.textContent = '✓ Salvo às ' + hhmm; r.classList.remove('erro'); }
+    } else {
+      // Memória do aparelho cheia: NÃO mente que salvou. Avisa e pede espaço.
+      if (s) s.textContent = '⚠ Não salvou — memória cheia';
+      if (r) { r.textContent = '⚠ Não salvou — memória cheia'; r.classList.add('erro'); }
+      toast('Memória do aparelho cheia — este briefing NÃO foi salvo. Sincronize e apague briefings antigos antes de continuar.', 'erro');
+    }
+    return ok;
   };
-  if (imediato) gravar();
-  else { _salvarPendente = true; _timerSalvar = setTimeout(gravar, 600); }
+  if (imediato) return gravar();
+  _salvarPendente = true; _timerSalvar = setTimeout(gravar, 600);
+  return true;
 }
 
 // Grava AGORA o que estiver esperando o tempinho do autosave. Chamado antes de
@@ -1625,6 +1716,7 @@ function renderLista(app) {
     const cont = $('#lista-contagem'); if (cont) cont.textContent = filt.length + ' de ' + todosAgora.length;
     ligarCards();
   };
+  _refreshCards = rerenderCards; // pra sincronização de fundo atualizar só os cartões
   $('#f-texto').oninput = debounce(e => { FILTROS.texto = e.target.value; rerenderCards(); }, 250);
   $('#f-os').oninput = debounce(e => { FILTROS.os = e.target.value; rerenderCards(); }, 250);
   $('#f-de').oninput = e => {
@@ -1664,8 +1756,14 @@ function htmlCards(lista) {
     return '<div class="vazio"><div class="icone">📭</div>Nenhum briefing por aqui ainda.' +
       (podeCriar() ? '<br>Toque em "Novo briefing" pra começar.' : '') + '</div>';
   }
+  const naFila = STORE.idsNaFila();
   return lista.map(b => {
     const rascunho = b.situacao !== 'enviado';
+    // Enviado mas ainda não confirmado pelo servidor: ou está na fila (subindo),
+    // ou o envio foi descartado após muitas falhas (_syncFalhou). O vendedor
+    // precisa ver isso -- antes o cartão ficava igual aos que já chegaram.
+    const naoSubiu = !rascunho && b._syncFalhou;
+    const subindo = !rascunho && !b._syncFalhou && naFila.has(b.id);
     return (
       '<button class="cartao-brief" data-id="' + b.id + '" data-rascunho="' + (rascunho ? '1' : '') + '">' +
       '<div><div class="nome">' + esc(b.cliente || 'Cliente sem nome') + (b.estabelecimento ? ' · ' + esc(b.estabelecimento) : '') + '</div>' +
@@ -1673,10 +1771,11 @@ function htmlCards(lista) {
       ' · ' + (b.itens || []).length + ' item(ns)</div>' +
       '<div class="badges">' +
       (b.numeroBrief ? '<span class="badge neutro">Nº ' + padBrief(b.numeroBrief) + '</span>' : '') +
-      (rascunho ? '<span class="badge rascunho">RASCUNHO</span>' : badgeStatus(b.status)) +
+      (naoSubiu ? '<span class="badge nao-subiu">⚠ NÃO SUBIU — toque</span>'
+        : subindo ? '<span class="badge subindo">⏳ subindo…</span>'
+        : rascunho ? '<span class="badge rascunho">RASCUNHO</span>' : badgeStatus(b.status)) +
       (b.tipoMedicao ? '<span class="badge ' + (b.tipoMedicao === 'Execução' ? 'tipo-execucao' : 'tipo-orcamento') + '">' + esc(b.tipoMedicao) + '</span>' : '') +
       (String(b.osNumero || '').trim() ? '<span class="badge neutro">O.S. ' + esc(b.osNumero) + '</span>' : '<span class="badge sem-os">SEM O.S.</span>') +
-      // Pra quem foi direcionado (só faz sentido depois de enviado)
       (!rascunho && b.designerAtribuido ? '<span class="badge designer">🎨 ' + esc(b.designerAtribuido.nome) + '</span>' : '') +
       '</div></div>' +
       '</button>'
@@ -1690,6 +1789,13 @@ function ligarCards() {
       const id = c.dataset.id;
       const b = STORE.getOS(id);
       if (!b) return;
+      // Briefing que não subiu: tocar tenta enviar de novo, ali mesmo.
+      if (b._syncFalhou) {
+        delete b._syncFalhou; delete b._syncMotivo;
+        const ok = STORE.saveOS(b); // re-enfileira e tenta sincronizar
+        toast(ok ? 'Tentando enviar de novo…' : 'Memória cheia — apague briefings antigos primeiro', ok ? 'sucesso' : 'erro');
+        return;
+      }
       const meu = b.vendedorUsuario === SESSAO.usuario;
       if (b.situacao !== 'enviado' && (meu || SESSAO.papel === 'admin')) location.hash = '#/editar/' + id;
       else location.hash = '#/b/' + id;
@@ -2746,7 +2852,14 @@ function enviarBriefing() {
     BRIEF.status = BRIEF.tipoMedicao === 'Execução' ? 'Aprovado pra execução' : 'Aguardando orçamento';
     BRIEF.enviadoEm = new Date().toISOString();
     BRIEF.semOS = !String(BRIEF.osNumero || '').trim();
-    salvarRascunho(true);
+    // NÃO diz "enviado" se não conseguiu nem gravar no aparelho. Antes, com a
+    // memória cheia, aparecia "enviado ✓" e o briefing sumia sem nunca subir.
+    const gravou = salvarRascunho(true);
+    if (!gravou) {
+      // Volta a situação: não está enviado de verdade.
+      BRIEF.situacao = 'rascunho';
+      return; // salvarRascunho já mostrou o aviso de memória cheia
+    }
     const id = BRIEF.id;
     BRIEF = null;
     toast('Briefing enviado pro design ✓ (sincroniza sozinho quando tiver sinal)', 'sucesso');
@@ -3086,7 +3199,15 @@ function renderAdmin(app) {
     '<div id="conteudo-admin"><div class="vazio">Carregando…</div></div>' +
     '</main>';
   ligarTopo();
-  $$('.aba[data-aba]').forEach(bt => bt.onclick = () => { location.hash = '#/admin/' + bt.dataset.aba; });
+  $$('.aba[data-aba]').forEach(bt => bt.onclick = () => {
+    const ir = () => { location.hash = '#/admin/' + bt.dataset.aba; };
+    // Sair da aba Configurações com campo mexido e não salvo perde tudo (é um
+    // formulário longo com um só Salvar no fim). Avisa antes.
+    if (aba === 'config' && _configSuja && bt.dataset.aba !== 'config') {
+      confirmar('Sair sem salvar?', 'Você mexeu nas configurações e ainda não salvou. Sair agora perde as alterações.',
+        'Sair sem salvar', () => { _configSuja = false; ir(); }, true);
+    } else ir();
+  });
   const alvo = $('#conteudo-admin');
   if (aba === 'usuarios') adminUsuarios(alvo);
   else if (aba === 'arquivos') adminArquivos(alvo);
@@ -3228,13 +3349,30 @@ function adminArquivos(alvo) {
   $('#input-backup').onchange = e => {
     const f = e.target.files && e.target.files[0];
     if (!f) return;
+    const input = e.target;
     const leitor = new FileReader();
     leitor.onload = () => {
-      try {
-        STORE.importarBackup(JSON.parse(leitor.result));
-        toast('Backup importado ✓', 'sucesso');
-        renderApp();
-      } catch (err) { toast('Arquivo inválido: ' + err.message, 'erro'); }
+      let dados;
+      try { dados = JSON.parse(leitor.result); }
+      catch (err) { toast('Arquivo inválido: ' + err.message, 'erro'); input.value = ''; return; }
+      if (!dados || !Array.isArray(dados.os)) { toast('Este arquivo não é um backup do Brief.', 'erro'); input.value = ''; return; }
+      // Importar SUBSTITUI tudo e joga fora a fila do que ainda não subiu.
+      // Antes fazia isso sem perguntar -- um clique curioso apagava o trabalho
+      // da rua. Agora confirma, dizendo o tamanho do estrago.
+      const atuais = STORE.getAllOS().filter(x => !x.apagadoEm).length;
+      const naFila = (STORE.getQueue() || []).length;
+      const aviso = 'Isto vai <b>substituir os ' + atuais + ' briefing(s)</b> deste aparelho pelos ' +
+        dados.os.length + ' do arquivo' +
+        (naFila ? ' e <b>descartar ' + naFila + ' item(ns) que ainda não subiram</b>' : '') +
+        '. Não dá pra desfazer.';
+      confirmar('Substituir tudo por este backup?', aviso, 'Substituir', () => {
+        try {
+          STORE.importarBackup(dados);
+          toast('Backup importado ✓ (' + dados.os.length + ' briefings)', 'sucesso');
+          renderApp();
+        } catch (err) { toast('Não consegui importar: ' + err.message, 'erro'); }
+      }, true);
+      input.value = ''; // permite reescolher o mesmo arquivo depois
     };
     leitor.readAsText(f);
   };
@@ -3274,7 +3412,9 @@ async function adminArmazenamento(alvo) {
     ).join('') + '</table></div>';
 }
 
+let _configSuja = false;
 function adminConfig(alvo) {
+  _configSuja = false; // acabou de (re)abrir a aba, nada mexido ainda
   const cfg = STORE.getCFG();
   alvo.innerHTML =
     '<div class="card"><div class="sub-secao">Dicas por superfície</div>' +
@@ -3317,6 +3457,7 @@ function adminConfig(alvo) {
 
     '<div class="card"><div class="sub-secao">Listas</div>' +
     '<div class="campo"><label>Tipos de item (um por linha)</label>' +
+    '<p class="dica-campo" style="margin:0 0 6px">Cuidado ao <b>renomear</b> um tipo: as fotos exigidas dele (acima) recomeçam do padrão. Se quiser mudar as fotos, ajuste depois de salvar o nome novo.</p>' +
     '<textarea rows="6" id="cf-tipos">' + esc((cfg.tiposItem || []).join('\n')) + '</textarea></div>' +
     '<div class="campo"><label>Superfícies (uma por linha)</label>' +
     '<textarea rows="6" id="cf-superficies">' + esc((cfg.superficies || []).join('\n')) + '</textarea></div>' +
@@ -3339,14 +3480,22 @@ function adminConfig(alvo) {
       r$.textContent = r.ok ? 'Chegou lá ✓ (HTTP ' + r.http + ')' : 'Falhou: ' + (r.erro || ('HTTP ' + r.http) || r.motivo);
     } catch (e) { r$.textContent = 'Falhou: ' + e.message; }
   };
+  // Qualquer mexida marca a config como "suja", pra avisar antes de trocar de aba.
+  alvo.addEventListener('input', () => { _configSuja = true; });
+  alvo.addEventListener('change', () => { _configSuja = true; });
+
   $('#btn-salvar-config').onclick = () => {
     const cfg2 = STORE.getCFG();
     cfg2.dicas = cfg2.dicas || {};
     $$('[data-dica]', alvo).forEach(t => { cfg2.dicas[t.dataset.dica] = t.value.trim(); });
     const tipos = $('#cf-tipos').value.split('\n').map(s => s.trim()).filter(Boolean);
     const superficies = $('#cf-superficies').value.split('\n').map(s => s.trim()).filter(Boolean);
-    if (tipos.length) cfg2.tiposItem = tipos;
-    if (superficies.length) cfg2.superficies = superficies;
+    // Lista obrigatória vazia NÃO é ignorada em silêncio (antes o "salvo ✓"
+    // aparecia e nada mudava). Avisa e não salva.
+    if (!tipos.length) { toast('A lista de tipos de item não pode ficar vazia.', 'erro'); return; }
+    if (!superficies.length) { toast('A lista de superfícies não pode ficar vazia.', 'erro'); return; }
+    cfg2.tiposItem = tipos;
+    cfg2.superficies = superficies;
     // Fotos obrigatórias por tipo
     const porTipo = {};
     $$('[data-fototipo]', alvo).forEach(cb => {
@@ -3365,7 +3514,9 @@ function adminConfig(alvo) {
     if (servicos.length) cfg2.tiposServico = servicos;
     cfg2.webhookUrl = $('#cf-webhook').value.trim();
     STORE.saveCFG(cfg2, SESSAO.nome);
+    _configSuja = false;
     toast('Configurações salvas ✓ (sincronizam pra equipe)', 'sucesso');
+    adminConfig(alvo); // redesenha com o que ficou salvo (antes a tela não refletia)
   };
 }
 
@@ -3412,12 +3563,16 @@ async function adminIntegracao(alvo) {
         '<p class="dica-campo" style="margin-top:8px">Com o fallback do PCP ativo a busca já funciona hoje. Cadastrar o Mubisys direto deixa a busca em tempo real, sem esperar a importação de hora em hora do PCP.</p>'
       : '<div class="aviso vermelho">Sem conexão com o servidor agora.</div>') +
     '</div>' +
-    '<div class="card"><div class="sub-secao">Credenciais do Mubisys (opcional)</div>' +
-    '<div class="campo"><label>Public key</label><input id="mb-public" value="' + esc(st ? st.publicKey || '' : '') + '"></div>' +
-    '<div class="campo"><label>Access token (deixe em branco pra manter o atual)</label><input id="mb-token" type="text" autocomplete="off"></div>' +
-    '<div class="campo"><label>Base da API</label><input id="mb-base" value="' + esc(st ? st.base || '' : 'https://api.mubisys.com/api') + '"></div>' +
-    '<button class="botao" id="btn-salvar-mubisys">Salvar credenciais</button>' +
-    '<span id="mb-resultado" class="dica-campo" style="margin-left:8px"></span></div>';
+    // O formulário de credenciais SÓ aparece quando o status carregou. Sem
+    // conexão, mostrá-lo em branco e salvável apagava a chave que estava lá.
+    (st
+      ? '<div class="card"><div class="sub-secao">Credenciais do Mubisys (opcional)</div>' +
+        '<div class="campo"><label>Public key</label><input id="mb-public" value="' + esc(st.publicKey || '') + '"></div>' +
+        '<div class="campo"><label>Access token (deixe em branco pra manter o atual)</label><input id="mb-token" type="text" autocomplete="off"></div>' +
+        '<div class="campo"><label>Base da API</label><input id="mb-base" value="' + esc(st.base || 'https://api.mubisys.com/api') + '"></div>' +
+        '<button class="botao" id="btn-salvar-mubisys">Salvar credenciais</button>' +
+        '<span id="mb-resultado" class="dica-campo" style="margin-left:8px"></span></div>'
+      : '<div class="card"><p class="dica-campo">Pra ver ou trocar as credenciais, abra esta aba com internet. Sem carregar o que está gravado, salvar apagaria a chave atual.</p></div>');
   const btn = $('#btn-salvar-mubisys');
   if (btn) btn.onclick = async () => {
     const r$ = $('#mb-resultado');

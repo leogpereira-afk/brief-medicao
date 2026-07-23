@@ -448,6 +448,14 @@ input:focus, select:focus, textarea:focus { outline: none; border-color: var(--i
 .badge.rascunho { background: #E5E7EB; color: #374151; }
 .badge.sem-os { background: var(--alerta-bg); color: var(--alerta); border: 1px dashed var(--alerta); }
 .badge.designer { background: var(--indigo-15); color: var(--indigo-escuro); }
+.comparar-versoes { display: grid; grid-template-columns: 1fr 1fr; gap: 10px; margin: 14px 0; }
+.comparar-versoes .versao { border: 1px solid var(--borda); border-radius: 10px; padding: 10px 12px; }
+.comparar-versoes .rot { font-family: 'Poppins'; font-weight: 600; font-size: .78rem; color: var(--indigo); margin-bottom: 4px; }
+.comparar-versoes .dados { font-size: .86rem; color: var(--tinta); }
+@media (max-width: 460px){ .comparar-versoes { grid-template-columns: 1fr; } }
+.badge.subindo { background: var(--alerta-bg); color: var(--alerta); }
+.badge.nao-subiu { background: var(--perigo); color: #fff; }
+.salvo-rodape.erro { color: var(--perigo); }
 .badge.tipo-execucao { background: var(--perigo); color: #fff; }
 .badge.tipo-orcamento { background: var(--azul-bg); color: var(--azul); }
 .badge.neutro { background: var(--indigo-8); color: var(--indigo-escuro); }

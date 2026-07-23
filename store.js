@@ -66,14 +66,21 @@ const STORE = (() => {
     } catch { return fallback; }
   }
 
+  // Devolve true se gravou, false se a memória do aparelho estourou. Quem
+  // grava algo que NÃO pode se perder (um briefing) precisa saber disso pra
+  // não dizer "salvo" quando não salvou.
   function lsSet(key, value) {
     try {
       localStorage.setItem(key, JSON.stringify(value));
+      return true;
     } catch (e) {
-      if (e && e.name === 'QuotaExceededError') {
+      if (e && (e.name === 'QuotaExceededError' || /quota/i.test(e.message || ''))) {
         console.error('[store] QuotaExceededError em', key);
         _notifyListeners('quota', null);
+      } else {
+        console.error('[store] falha ao gravar', key, e);
       }
+      return false;
     }
   }
 
@@ -88,18 +95,22 @@ const STORE = (() => {
   }
 
   function _setAllOS(arr) {
-    lsSet(K.OS, arr);
+    return lsSet(K.OS, arr);
   }
 
-  // Salva (cria ou atualiza) uma O.S offline-first
+  // Salva (cria ou atualiza) uma O.S offline-first. Devolve false se NÃO
+  // conseguiu gravar no aparelho (memória cheia) -- aí o chamador não deve
+  // dizer que salvou.
   function saveOS(os) {
     const all = getAllOS();
     const idx = all.findIndex(o => o.id === os.id);
     if (idx >= 0) all[idx] = os;
     else all.push(os);
-    _setAllOS(all);
+    const ok = _setAllOS(all);
+    if (!ok) return false;        // sem gravar o cache, não faz sentido enfileirar
     _enqueue({ action: 'upsert', os });
     trySync();
+    return true;
   }
 
   function deleteOS(id, quem) {
@@ -175,6 +186,12 @@ const STORE = (() => {
 
   // ── Fila offline ──────────────────────────────────────────────────────────
   function getQueue() { return lsGet(K.FILA, []); }
+  // Ids de briefings que ainda têm upsert na fila (não confirmados pelo servidor).
+  function idsNaFila() {
+    const s = new Set();
+    getQueue().forEach(it => { if (it.action === 'upsert' && it.os && it.os.id) s.add(it.os.id); });
+    return s;
+  }
 
   function _enqueue(item) {
     let q = getQueue();
@@ -334,6 +351,8 @@ const STORE = (() => {
             const all = getAllOS();
             const idx = all.findIndex(o => o.id === res.os.id);
             if (idx >= 0) {
+              // Subiu agora: limpa a marca de "não subiu", se havia.
+              if (all[idx]._syncFalhou) { delete all[idx]._syncFalhou; delete all[idx]._syncMotivo; }
               // numeroBrief é campo do SERVIDOR (atribuído na 1ª sincronização):
               // copia sempre que chegar, mesmo se houve edição local nova.
               if (res.os.numeroBrief && !all[idx].numeroBrief) {
@@ -365,6 +384,13 @@ const STORE = (() => {
             console.warn('[store] descartando item após', n, 'falhas:', sig, msg);
             _removeFromQueue(item);
             _failCount.delete(sig);
+            // Não some em silêncio: marca o PRÓPRIO briefing como "não subiu",
+            // pra a lista poder mostrar isso em vez de ele parecer sincronizado.
+            if (item.action === 'upsert' && item.os && item.os.id) {
+              const all = getAllOS();
+              const idx = all.findIndex(o => o.id === item.os.id);
+              if (idx >= 0) { all[idx]._syncFalhou = true; all[idx]._syncMotivo = msg; _setAllOS(all); }
+            }
             _notifyListeners('item-descartado', { item, motivo: msg });
           }
         }
@@ -676,7 +702,7 @@ const STORE = (() => {
     // Conflito manual
     aceitarServidor, sobrescreverServidor,
     // Fila
-    getQueue,
+    getQueue, idsNaFila,
     // Backup
     exportarBackup, importarBackup,
     // Utilitários
