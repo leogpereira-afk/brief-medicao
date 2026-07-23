@@ -407,13 +407,16 @@ function htmlTopo(tituloTela) {
     '<div><div class="titulo">' + esc(tituloTela || 'Brief de Medição') + '</div>' +
     '<div class="sub">Impresilk · ' + esc(SESSAO ? SESSAO.nome : '') + '</div></div>' +
     '</a>' +
-    '<nav class="nav-desktop">' +
-    '<a href="#/lista" class="' + (ROTA.nome === 'lista' ? 'ativo' : '') + '">Briefings</a>' +
-    (podeCriar() ? '<a href="#/novo">+ Novo</a>' : '') +
-    (podeVerArquivos() ? '<a href="#/arquivos" class="' + (ROTA.nome === 'arquivos' ? 'ativo' : '') + '">Arquivos</a>' : '') +
-    (podeUsarLayout() ? '<a href="#/layout" class="' + (ROTA.nome === 'layout' ? 'ativo' : '') + '">Gerador de layout</a>' : '') +
-    (SESSAO && SESSAO.papel === 'admin' ? '<a href="#/admin" class="' + (ROTA.nome === 'admin' ? 'ativo' : '') + '">Painel de controle</a>' : '') +
-    '<a href="#" id="link-sair-desktop">Sair</a>' +
+    // Navegação SEMPRE visível, inclusive no celular (vira uma faixa de
+    // atalhos embaixo do título). Antes ela sumia abaixo de 900px e a única
+    // saída era o ☰ -- quem usa no celular, que é a maioria, não descobria que
+    // existiam Arquivos e Gerador de layout.
+    '<nav class="nav-topo">' +
+    '<a href="#/lista" class="' + (ROTA.nome === 'lista' ? 'ativo' : '') + '">📋 Briefings</a>' +
+    (podeCriar() ? '<a href="#/novo" class="' + (ROTA.nome === 'novo' || ROTA.nome === 'editor' ? 'ativo' : '') + '">➕ Novo</a>' : '') +
+    (podeVerArquivos() ? '<a href="#/arquivos" class="' + (ROTA.nome === 'arquivos' ? 'ativo' : '') + '">🖼 Arquivos</a>' : '') +
+    (podeUsarLayout() ? '<a href="#/layout" class="' + (ROTA.nome === 'layout' ? 'ativo' : '') + '">🗂 Layout</a>' : '') +
+    (SESSAO && SESSAO.papel === 'admin' ? '<a href="#/admin" class="' + (ROTA.nome === 'admin' ? 'ativo' : '') + '">🛠 Painel</a>' : '') +
     '</nav>' +
     // O estado da sincronização é BOTÃO, não etiqueta: antes ele só informava, e
     // quem via "2 pendente(s)" não tinha onde apertar -- tinha que abrir o menu
@@ -432,6 +435,10 @@ function ligarTopo() {
   if (sair) sair.onclick = e => { e.preventDefault(); sairDaConta(); };
   const chip = $('#chip-sync');
   if (chip) chip.onclick = () => sincronizarAgora();
+  // No celular a faixa de navegação rola de lado. Se a tela aberta é a última
+  // da fila (Painel), o atalho dela ficava escondido fora da vista.
+  const ativo = $('.nav-topo a.ativo');
+  if (ativo && ativo.scrollIntoView) ativo.scrollIntoView({ block: 'nearest', inline: 'nearest' });
 }
 
 // Sincroniza e DIZ o que aconteceu. O botão fica travado enquanto roda, senão

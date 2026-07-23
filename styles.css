@@ -53,6 +53,7 @@ a { color: var(--indigo); }
   color: #fff;
   padding: calc(10px + env(safe-area-inset-top)) 14px 10px;
   display: flex; align-items: center; gap: 10px;
+  flex-wrap: wrap;   /* a navegação desce pra segunda linha no celular */
   box-shadow: 0 2px 10px rgba(42, 48, 184, .35);
 }
 /* A marca é um link pra tela inicial: precisa de área de toque e não pode
@@ -66,7 +67,13 @@ a { color: var(--indigo); }
 .topo .marca:hover, .topo .marca:focus-visible { background: rgba(255,255,255,.12); outline: none; }
 .topo .marca img { height: 26px; width: auto; background: #fff; border-radius: 7px; padding: 3px 6px; }
 .topo .marca .titulo { font-family: 'Poppins'; font-weight: 600; font-size: 1.02rem; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
-.topo .marca .sub { font-size: .72rem; opacity: .85; font-family: 'Poppins'; font-weight: 500; }
+/* Uma linha só: com a navegação embaixo, o topo já tem duas faixas. Deixar o
+   "Impresilk · Fulano" quebrar empurrava a tela inteira pra baixo. */
+.topo .marca > div { min-width: 0; }
+.topo .marca .sub {
+  font-size: .72rem; opacity: .85; font-family: 'Poppins'; font-weight: 500;
+  white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
+}
 .chip-sync {
   font-family: 'Poppins'; font-weight: 600; font-size: .72rem;
   padding: 5px 10px; border-radius: 999px; white-space: nowrap;
@@ -86,12 +93,28 @@ a { color: var(--indigo); }
   color: #fff; border-radius: 10px; min-width: 44px; min-height: 40px;
   font-size: 1.25rem; cursor: pointer;
 }
-.nav-desktop { display: none; gap: 4px; }
-.nav-desktop a {
-  color: #fff; text-decoration: none; font-family: 'Poppins'; font-weight: 500;
-  font-size: .86rem; padding: 8px 12px; border-radius: 9px;
+/* Navegação do topo: no celular vira uma faixa de atalhos que rola de lado,
+   logo abaixo do título; no desktop entra na mesma linha da marca. */
+.nav-topo {
+  order: 3; flex: 1 0 100%;
+  display: flex; gap: 6px; align-items: center;
+  margin-top: 4px; padding-bottom: 2px;
+  overflow-x: auto; scrollbar-width: none; -webkit-overflow-scrolling: touch;
 }
-.nav-desktop a.ativo, .nav-desktop a:hover { background: rgba(255,255,255,.16); }
+.nav-topo::-webkit-scrollbar { display: none; }
+.nav-topo a {
+  color: #fff; text-decoration: none; font-family: 'Poppins'; font-weight: 500;
+  font-size: .84rem; padding: 8px 13px; border-radius: 999px; white-space: nowrap;
+  background: rgba(255,255,255,.12); border: 1px solid transparent;
+  min-height: 38px; display: inline-flex; align-items: center; gap: 5px;
+  -webkit-tap-highlight-color: transparent;
+}
+.nav-topo a:hover { background: rgba(255,255,255,.22); }
+/* O item ativo é sólido: no fundo indigo, um realce translúcido some. */
+.nav-topo a.ativo {
+  background: #fff; color: var(--indigo-escuro); font-weight: 600;
+  box-shadow: 0 2px 8px rgba(23,26,51,.22);
+}
 
 /* ── Menu lateral (mobile) ────────────────────────────────────────────────── */
 .menu-fundo { position: fixed; inset: 0; background: rgba(23,26,51,.5); z-index: 60; }
@@ -533,8 +556,9 @@ input:focus, select:focus, textarea:focus { outline: none; border-color: var(--i
 
 /* ── Desktop ──────────────────────────────────────────────────────────────── */
 @media (min-width: 900px) {
-  .botao-menu { display: none; }
-  .nav-desktop { display: flex; }
+  /* No desktop a navegação sobe pra linha da marca. O ☰ CONTINUA visível: é
+     onde moram Sair, Sincronizar, o manual e a ficha em branco. */
+  .nav-topo { order: 0; flex: 0 1 auto; margin-top: 0; overflow: visible; }
   .miolo { padding: 24px 20px 60px; }
   .modal-fundo { align-items: center; padding: 20px; }
   .modal { border-radius: 18px; }
