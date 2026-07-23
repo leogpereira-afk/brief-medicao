@@ -185,6 +185,21 @@ const PRANCHA = (() => {
     const t = String(texto == null ? '' : texto);
     return t ? (doc.splitTextToSize(t, largura)[0] || '') : '';
   }
+
+  // Escreve centralizado ENCOLHENDO até caber, em vez de cortar no meio.
+  // "COLORIDO DUPLA FACE + BRANCO" virava "COLORIDO DUPLA FACE +" na folha da
+  // produção -- o mesmo item, sem a tinta branca. Corte só como último recurso.
+  function textoQueCabe(doc, texto, xCentro, y, largura, fsInicial, fsMin) {
+    const t = String(texto == null ? '' : texto);
+    if (!t) return;
+    let fs = fsInicial;
+    doc.setFontSize(fs);
+    while (doc.getTextWidth(t) > largura && fs > (fsMin || 4.6)) {
+      fs -= 0.2; doc.setFontSize(fs);
+    }
+    doc.text(doc.getTextWidth(t) > largura ? cortar(doc, t, largura) : t, xCentro, y, { align: 'center' });
+    doc.setFontSize(fsInicial);
+  }
   function caixa(doc, x, y, w, h) {
     doc.setDrawColor(...BORDA); doc.setLineWidth(0.8);
     doc.rect(x, y, w, h);
@@ -192,7 +207,12 @@ const PRANCHA = (() => {
   // "Rótulo: valor" dentro de uma caixa. O valor NUNCA é cortado no meio: encolhe
   // até caber (nome de cliente e endereço cortados mandavam o instalador pro
   // lugar errado e a produção pro material errado).
-  function rotuloValor(doc, rotulo, valor, x, y, larguraCaixa, tamRotulo, tamValor) {
+  // `maxLinhas` (2 para cliente/contato/endereço): quando o texto não cabe num
+  // corpo ainda legível, ele QUEBRA em duas linhas em vez de encolher até virar
+  // formiga ou ser cortado. Razão social longa ("... Sao Jose LTDA ME") saía
+  // cortada em "... Construcao Sao", e endereço cortado manda o instalador pro
+  // lugar errado.
+  function rotuloValor(doc, rotulo, valor, x, y, larguraCaixa, tamRotulo, tamValor, maxLinhas) {
     const tam = tamRotulo || 10;
     doc.setFont('Poppins', 'normal'); doc.setFontSize(tam); doc.setTextColor(...PRETO);
     doc.text(rotulo, x, y);
@@ -200,12 +220,20 @@ const PRANCHA = (() => {
     const disp = Math.max(10, larguraCaixa - (xv - x) - 6);
     const txt = String(valor == null ? '' : valor);
     if (!txt) return;
+    const nMax = maxLinhas || 1;
+    // Com duas linhas disponíveis, para de encolher enquanto ainda dá pra ler.
+    const fsMin = nMax > 1 ? 7 : 5.5;
     let fs = tamValor || tam;
     doc.setFontSize(fs);
-    while (doc.getTextWidth(txt) > disp && fs > 5.5) { fs -= 0.3; doc.setFontSize(fs); }
+    while (doc.getTextWidth(txt) > disp && fs > fsMin) { fs -= 0.3; doc.setFontSize(fs); }
     doc.setTextColor(...CINZA_TXT);
-    // Se nem no menor corpo couber, aí sim reduz (caso extremo)
-    doc.text(doc.getTextWidth(txt) > disp ? (doc.splitTextToSize(txt, disp)[0] || '') : txt, xv, y);
+    if (doc.getTextWidth(txt) <= disp) { doc.text(txt, xv, y); return; }
+    // Não coube numa linha: distribui em até nMax linhas, centradas na altura
+    // original (senão a segunda linha invadiria a caixa de baixo).
+    const linhas = doc.splitTextToSize(txt, disp).slice(0, nMax);
+    const alturaLinha = fs + 1.4;
+    const yTopo = y - (linhas.length - 1) * alturaLinha / 2;
+    linhas.forEach((l, i) => doc.text(l, xv, yTopo + i * alturaLinha));
   }
 
   // ── Cabeçalho ─────────────────────────────────────────────────────────────
@@ -243,8 +271,8 @@ const PRANCHA = (() => {
     // Cliente ocupa mais espaço que contato: nome de empresa costuma ser longo
     const corte = wMeio * 0.56;
     caixa(doc, xMeio, y0, wMeio, linha);
-    rotuloValor(doc, 'Cliente:', p.cliente, xMeio + 8, y0 + linha / 2 + 4, corte - 12, 10.5);
-    rotuloValor(doc, 'Contato:', p.contato, xMeio + corte, y0 + linha / 2 + 4, wMeio - corte - 10, 10.5);
+    rotuloValor(doc, 'Cliente:', p.cliente, xMeio + 8, y0 + linha / 2 + 4, corte - 12, 10.5, 10.5, 2);
+    rotuloValor(doc, 'Contato:', p.contato, xMeio + corte, y0 + linha / 2 + 4, wMeio - corte - 10, 10.5, 10.5, 2);
 
     caixa(doc, xMeio, y0 + linha, wMeio, linha);
     rotuloValor(doc, 'Vend:', p.vendedor, xMeio + 8, y0 + linha * 1.5 + 4, corte - 12, 10.5);
@@ -252,7 +280,7 @@ const PRANCHA = (() => {
 
     caixa(doc, xMeio, y0 + linha * 2, wMeio, linha);
     if (modelo.endEntregaNoCabecalho) {
-      rotuloValor(doc, 'End:', p.endereco, xMeio + 8, y0 + linha * 2.5 + 4, wMeio * 0.52 - 10, 10.5);
+      rotuloValor(doc, 'End:', p.endereco, xMeio + 8, y0 + linha * 2.5 + 4, wMeio * 0.52 - 10, 10.5, 10.5, 2);
       doc.setFont('Poppins', 'normal'); doc.setFontSize(10.5); doc.setTextColor(...PRETO);
       doc.text('Entrega:', xMeio + wMeio * 0.55, y0 + linha * 2.5 + 4);
       doc.setTextColor(...VERMELHO);
@@ -349,7 +377,7 @@ const PRANCHA = (() => {
     const alt = Math.max(26, 15 + nLinhas * 11);
     caixa(doc, M, y, meio - M, alt);
     caixa(doc, meio, y, W - M - meio, alt);
-    rotuloValor(doc, 'Endereço:', p.endereco, M + 8, y + 17, meio - M - 20, 11);
+    rotuloValor(doc, 'Endereço:', p.endereco, M + 8, y + 17, meio - M - 20, 11, 11, 2);
     escreverObs(doc, p.obs, meio + 8, y + 15, W - M - meio - 20);
     return y + alt;
   }
@@ -420,17 +448,17 @@ const PRANCHA = (() => {
       const escrito = String(rotulos[i] || '').trim();
       const texto = escrito ? (item && /:$/.test(item) ? item + ' ' + escrito : escrito) : item;
       if (texto) {
-        doc.setFont('Poppins', 'normal'); doc.setFontSize(7.4);
+        doc.setFont('Poppins', 'normal');
         doc.setTextColor(...(corFundo ? [255, 255, 255] : PRETO));
-        doc.text(cortar(doc, texto, wRotulo - 8), x + wCheck + wRotulo / 2, yy + 9.2, { align: 'center' });
+        textoQueCabe(doc, texto, x + wCheck + wRotulo / 2, yy + 9.2, wRotulo - 8, 7.4, 5);
       }
       cols.forEach((c, j) => {
         const cx = x + wCheck + wRotulo + j * wCol;
         caixa(doc, cx, yy, wCol, hLinha);
         const v = valores[i] && valores[i][j];
         if (v) {
-          doc.setFont('Poppins', 'normal'); doc.setFontSize(7.2); doc.setTextColor(...PRETO);
-          doc.text(cortar(doc, String(v), wCol - 6), cx + wCol / 2, yy + 9.2, { align: 'center' });
+          doc.setFont('Poppins', 'normal'); doc.setTextColor(...PRETO);
+          textoQueCabe(doc, String(v), cx + wCol / 2, yy + 9.2, wCol - 6, 7.2, 5);
         }
       });
       yy += hLinha;
@@ -526,23 +554,48 @@ const PRANCHA = (() => {
     const yCorpo = y + 6;
     const yFimCorpo = H - 34;
 
-    // Checklists do setor, na lateral esquerda
+    // Checklists do setor, na lateral esquerda. Quando não cabem numa coluna,
+    // seguem numa SEGUNDA coluna ao lado.
+    //
+    // Antes havia um `break` aqui: a tabela que não coubesse simplesmente não
+    // era desenhada. Impressão vinil tem 6 tabelas e só 4 saíam -- ORIGEM
+    // MEDIDAS e "Exportado com:" sumiam da folha, levando junto o que o
+    // designer tinha marcado nelas. Perder marcação em silêncio é pior do que
+    // uma prancha apertada.
+    const X0 = M + 4;
+    const LIMITE_TABELAS = W * 0.58;   // depois disto não sobra corpo pro desenho
+    let colX = X0;
     let yTab = yCorpo + 4;
-    let larguraTabelas = 0;
+    let larguraCol = 0;         // largura da coluna que está sendo preenchida
+    let larguraTabelas = 0;     // quanto o bloco todo ocupa (pra afastar a arte)
+
     (modelo.caixasSoltas || []).forEach((rot, i) => {
-      caixa(doc, M + 4, yTab, 16, 16);
-      if (ficha.soltas && ficha.soltas[i]) visto(doc, M + 4, yTab, 16);
+      caixa(doc, colX, yTab, 16, 16);
+      if (ficha.soltas && ficha.soltas[i]) visto(doc, colX, yTab, 16);
       doc.setFont('Poppins', 'normal'); doc.setFontSize(8.4); doc.setTextColor(...PRETO);
-      doc.text(rot, M + 26, yTab + 11.5);
+      doc.text(rot, colX + 22, yTab + 11.5);
       yTab += 24;
-      larguraTabelas = Math.max(larguraTabelas, 120);
+      larguraCol = Math.max(larguraCol, 120);
     });
+
     const tabelas = modelo.tabelas || [];
     for (let ti = 0; ti < tabelas.length; ti++) {
-      const r = tabelaCheck(doc, tabelas[ti], M + 4, yTab, (ficha.tabelas || {})[ti]);
+      const tab = tabelas[ti];
+      // Altura da tabela ANTES de desenhar: é o que decide se ela abre coluna.
+      const alturaPrevista = 15 + (tab.itens || []).length * 13.5;
+      const comecouAColuna = yTab > yCorpo + 4;
+      if (comecouAColuna && yTab + alturaPrevista > yFimCorpo - 6) {
+        const proximoX = colX + larguraCol + 12;
+        // Só abre coluna nova se ainda sobrar página pro desenho.
+        if (proximoX < LIMITE_TABELAS) {
+          larguraTabelas = Math.max(larguraTabelas, proximoX - X0);
+          colX = proximoX; yTab = yCorpo + 4; larguraCol = 0;
+        }
+      }
+      const r = tabelaCheck(doc, tab, colX, yTab, (ficha.tabelas || {})[ti]);
       yTab += r.altura + 12;
-      larguraTabelas = Math.max(larguraTabelas, r.largura);
-      if (yTab > yFimCorpo - 30) break; // não invade o rodapé
+      larguraCol = Math.max(larguraCol, r.largura);
+      larguraTabelas = Math.max(larguraTabelas, colX - X0 + larguraCol);
     }
 
     // Área do desenho: à direita das tabelas
