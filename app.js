@@ -819,6 +819,9 @@ function montarPrancha(base, extra) {
     tituloServico: '',
     medidas: '',
     detalhe: '',
+    // Urgência marcada pelo vendedor: o carimbo URGENTE já vem ligado na prévia
+    // (o designer ainda pode desligar). É o padrão inteligente, não uma trava.
+    urgente: !!(b.urgente),
     imagem: null,      // base64 só na hora de gerar (não vai pro registro)
     imagemId: null,    // referência da foto no store
     equipe: [], ferramentas: [], acessorios: [],
@@ -924,7 +927,8 @@ function baseProducao() {
     telefone: (os && os.telefone) || (b && b.telefone) || '',
     vendedor: PROD.vendedor || (os && os.vendedor) || (b && b.vendedor) || '',
     endereco: PROD.endereco || (os && os.endereco) || (b && b.endereco) || '',
-    osNumero: String(PROD.osNumero || (b && b.osNumero) || '').trim()
+    osNumero: String(PROD.osNumero || (b && b.osNumero) || '').trim(),
+    urgente: !!(b && b.urgente)   // urgência do vendedor → carimbo já marcado
   };
 }
 
@@ -2011,6 +2015,7 @@ function htmlCards(lista) {
       '<div class="meta">' + fmtDataHora(b.dataHora || b.criadoEm) + ' · ' + esc(b.vendedor || '') +
       ' · ' + (b.itens || []).length + ' item(ns)</div>' +
       '<div class="badges">' +
+      (b.urgente ? '<span class="badge urgente-badge">🔴 URGENTE</span>' : '') +
       (b.numeroBrief ? '<span class="badge neutro">Nº ' + padBrief(b.numeroBrief) + '</span>' : '') +
       (naoSubiu ? '<span class="badge nao-subiu">⚠ NÃO SUBIU — toque</span>'
         : subindo ? '<span class="badge subindo">⏳ subindo…</span>'
@@ -2177,6 +2182,12 @@ function htmlEtapa2(cfg) {
     '</div>' +
     (exec ? '<div class="aviso vermelho">Estas medidas vão pra produção. Confira duas vezes.</div>' : '') +
     '</div>' +
+
+    // Urgência marcada pelo vendedor no cliente: a prancha da produção já sai com
+    // o carimbo URGENTE, sem precisar avisar o designer à parte.
+    '<div class="campo"><label>Prioridade</label>' +
+    '<button class="chip chip-urgente ' + (BRIEF.urgente ? 'marcado' : '') + '" id="c-urgente">🔴 Marcar como URGENTE</button>' +
+    '<div class="dica-campo">Só marque se for pressa de verdade — a produção prioriza.</div></div>' +
 
     '<div class="campo"><label>Natureza do serviço</label><select id="c-natureza"><option value="">Escolher…</option>' +
     ['Serviço novo', 'Restauração ou troca', 'Remoção'].map(o => '<option ' + (BRIEF.naturezaServico === o ? 'selected' : '') + '>' + o + '</option>').join('') + '</select></div>' +
@@ -2484,7 +2495,7 @@ function htmlEtapa6() {
     '<div class="dupla-dado"><dt>Número do brief</dt><dd>' + esc(rotuloBrief(BRIEF)) + '</dd></div>' +
     '<div class="dupla-dado"><dt>Cliente</dt><dd>' + esc(BRIEF.cliente || '') + '</dd></div>' +
     '<div class="dupla-dado"><dt>Telefone</dt><dd>' + esc(BRIEF.telefone || '') + '</dd></div>' +
-    '<div class="dupla-dado"><dt>Tipo de medição</dt><dd>' + esc(BRIEF.tipoMedicao || '') + '</dd></div>' +
+    '<div class="dupla-dado"><dt>Tipo de medição</dt><dd>' + esc(BRIEF.tipoMedicao || '') + (BRIEF.urgente ? ' · <b style="color:var(--perigo)">🔴 URGENTE</b>' : '') + '</dd></div>' +
     '<div class="dupla-dado"><dt>O.S.</dt><dd>' + (semOS ? 'Sem O.S. por enquanto' : esc(BRIEF.osNumero)) + '</dd></div>' +
     '<div class="dupla-dado"><dt>Local</dt><dd>' + esc(BRIEF.endereco || 'não informado') + '</dd></div>' +
     '<div class="dupla-dado"><dt>Quem mediu</dt><dd>' + esc(BRIEF.quemMediu || '') + '</dd></div>' +
@@ -2613,6 +2624,12 @@ function ligarEditor(cfg) {
     BRIEF.tipoMedicao = op.dataset.tipomed;
     salvarRascunho(true); renderApp();
   });
+  const urg = $('#c-urgente');
+  if (urg) urg.onclick = () => {
+    BRIEF.urgente = !BRIEF.urgente;
+    urg.classList.toggle('marcado', BRIEF.urgente);
+    salvarRascunho();
+  };
 
   // Etapa 3
   bind('#c-endereco', 'endereco');
