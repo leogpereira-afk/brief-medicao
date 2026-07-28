@@ -143,13 +143,70 @@ const PRANCHA = (() => {
     atencao: false, enderecoObs: true, rotuloData: 'Data:', tabelas: [], rodape: 'producao'
   };
 
-  function modeloDe(nome) {
-    if (!nome) return MODELO_PADRAO;
-    const chave = Object.keys(MODELOS).find(k => norm(k) === norm(nome));
-    return chave ? MODELOS[chave] : MODELO_PADRAO;
-  }
   function norm(s) {
     return String(s || '').toLowerCase().normalize('NFD').replace(/[̀-ͯ]/g, '').trim();
+  }
+
+  // ── Fichas configuráveis pelo admin ───────────────────────────────────────
+  // Os modelos acima (MODELOS) são o PADRÃO de fábrica. O admin pode sobrescrever
+  // em cfg.fichasSetores (sincronizado como o resto da config). Guarda cor em hex
+  // e um formato simples de tabela; aqui convertemos pro que o desenho espera.
+  function hexParaRgb(hex) {
+    const m = /^#?([0-9a-f]{2})([0-9a-f]{2})([0-9a-f]{2})$/i.exec(String(hex || '').trim());
+    return m ? [parseInt(m[1], 16), parseInt(m[2], 16), parseInt(m[3], 16)] : null;
+  }
+  function rgbParaHex(rgb) {
+    if (!Array.isArray(rgb)) return '#384018';
+    return '#' + rgb.slice(0, 3).map(n => Math.max(0, Math.min(255, n | 0)).toString(16).padStart(2, '0')).join('');
+  }
+  // Texto branco sobre selo escuro, preto sobre claro (luminância).
+  function corTextoDe(rgb) {
+    const [r, g, b] = rgb || [0, 0, 0];
+    const lum = (0.299 * r + 0.587 * g + 0.114 * b);
+    return lum > 150 ? [40, 40, 40] : [255, 255, 255];
+  }
+  // Junta a versão do admin por cima do padrão do setor.
+  function mesclarSetor(base, ov) {
+    const cor = ov.cor ? (hexParaRgb(ov.cor) || base.cor) : base.cor;
+    return {
+      ...base,
+      cor,
+      corTexto: ov.cor ? corTextoDe(cor) : base.corTexto,
+      atencao: ov.atencao != null ? !!ov.atencao : base.atencao,
+      rodape: ov.rodape !== undefined ? (ov.rodape || null) : base.rodape,
+      caixasSoltas: Array.isArray(ov.caixasSoltas) ? ov.caixasSoltas.filter(Boolean) : base.caixasSoltas,
+      tabelas: Array.isArray(ov.tabelas)
+        ? ov.tabelas.map(t => {
+            const nt = {
+              titulo: t.titulo || '',
+              itens: (t.itens || []).map(x => String(x == null ? '' : x)),
+              colunas: (t.colunas || []).filter(Boolean),
+              semCheck: !!t.semCheck
+            };
+            if (t.cores) nt.cores = t.cores; // cores de linha (Serralheria)
+            return nt;
+          })
+        : base.tabelas
+    };
+  }
+  // Mapa efetivo: padrão + overrides do admin (inclusive setores novos).
+  function todosModelos(cfg) {
+    const out = {};
+    Object.keys(MODELOS).forEach(k => { out[k] = MODELOS[k]; });
+    const custom = cfg && cfg.fichasSetores;
+    if (custom && typeof custom === 'object') {
+      Object.keys(custom).forEach(k => {
+        if (!k) return;
+        out[k] = mesclarSetor(out[k] || MODELO_PADRAO, custom[k] || {});
+      });
+    }
+    return out;
+  }
+  function modeloDe(nome, cfg) {
+    if (!nome) return MODELO_PADRAO;
+    const models = todosModelos(cfg);
+    const chave = Object.keys(models).find(k => norm(k) === norm(nome));
+    return chave ? models[chave] : MODELO_PADRAO;
   }
 
   // ── Base do documento ─────────────────────────────────────────────────────
@@ -579,7 +636,7 @@ const PRANCHA = (() => {
 
   // ── Uma prancha ───────────────────────────────────────────────────────────
   async function desenhar(doc, p, cfg) {
-    const modelo = modeloDe(p.seloServico || p.setor);
+    const modelo = modeloDe(p.seloServico || p.setor, cfg);
     const ficha = p.ficha || {};          // o que o designer marcou na prévia
     let y = cabecalho(doc, p, cfg, modelo);
     if (modelo.atencao) {
@@ -701,5 +758,11 @@ const PRANCHA = (() => {
     return doc;
   }
 
-  return { gerarPdf, desenhar, novoDoc, modeloDe, setores: Object.keys(MODELOS), W, H };
+  // `setoresPadrao` = os de fábrica; `todosModelos(cfg)` = padrão + admin.
+  // `hexParaRgb/rgbParaHex` ajudam o editor do admin a converter cor.
+  return {
+    gerarPdf, desenhar, novoDoc, modeloDe, todosModelos,
+    modelosPadrao: MODELOS, setoresPadrao: Object.keys(MODELOS),
+    hexParaRgb, rgbParaHex, W, H
+  };
 })();

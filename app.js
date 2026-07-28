@@ -1250,7 +1250,7 @@ async function gerarLoteProjeto(b) {
 // Modelo do setor (tabelas e caixas) — só existe depois que prancha.js carrega.
 function modeloDaPrancha(p) {
   if (typeof PRANCHA === 'undefined') return null;
-  return PRANCHA.modeloDe(p.seloServico || p.setor);
+  return PRANCHA.modeloDe(p.seloServico || p.setor, STORE.getCFG());
 }
 
 // Estrutura onde ficam as marcas da ficha. Criada sob demanda pra não inchar
@@ -3533,6 +3533,7 @@ function abrirVincularOS(b) {
 
 const ABAS_ADMIN = [
   { id: 'usuarios', nome: 'Usuários' },
+  { id: 'fichas', nome: 'Fichas dos setores' },
   { id: 'arquivos', nome: 'Arquivos e lixeira' },
   { id: 'armazenamento', nome: 'Armazenamento' },
   { id: 'config', nome: 'Configurações' },
@@ -3555,20 +3556,204 @@ function renderAdmin(app) {
   ligarTopo();
   $$('.aba[data-aba]').forEach(bt => bt.onclick = () => {
     const ir = () => { location.hash = '#/admin/' + bt.dataset.aba; };
-    // Sair da aba Configurações com campo mexido e não salvo perde tudo (é um
-    // formulário longo com um só Salvar no fim). Avisa antes.
-    if (aba === 'config' && _configSuja && bt.dataset.aba !== 'config') {
-      confirmar('Sair sem salvar?', 'Você mexeu nas configurações e ainda não salvou. Sair agora perde as alterações.',
-        'Sair sem salvar', () => { _configSuja = false; ir(); }, true);
+    const saindoDe = (t) => aba === t && bt.dataset.aba !== t;
+    // Sair de Configurações ou de Fichas com alteração não salva perde tudo
+    // (as duas têm um só Salvar no fim). Avisa antes.
+    if ((saindoDe('config') && _configSuja) || (saindoDe('fichas') && _fichasSuja)) {
+      confirmar('Sair sem salvar?', 'Você mexeu e ainda não salvou. Sair agora perde as alterações.',
+        'Sair sem salvar', () => { _configSuja = false; _fichasSuja = false; ir(); }, true);
     } else ir();
   });
   const alvo = $('#conteudo-admin');
   if (aba === 'usuarios') adminUsuarios(alvo);
+  else if (aba === 'fichas') adminFichas(alvo);
   else if (aba === 'arquivos') adminArquivos(alvo);
   else if (aba === 'armazenamento') adminArmazenamento(alvo);
   else if (aba === 'config') adminConfig(alvo);
   else if (aba === 'log') adminLog(alvo);
   else if (aba === 'integracao') adminIntegracao(alvo);
+}
+
+/* ══════════════════ Editor das fichas dos setores ══════════════════ */
+// As fichas da prancha (opções que a produção marca) deixaram de ser fixas no
+// código: o admin cria/edita/apaga aqui, e vira cfg.fichasSetores (sincronizado).
+let FICHAS_EDIT = null;
+let _fichasSuja = false;
+const RODAPES = [
+  ['', 'Nenhum'],
+  ['producao', 'Liberação produção'],
+  ['tecnica-producao', 'Liberação técnica + produção'],
+  ['comercial-producao', 'Liberação comercial + produção']
+];
+
+// Modelos efetivos (padrão + admin) num formato editável (cor em hex, listas soltas).
+function fichasParaEditar(cfg) {
+  const models = (typeof PRANCHA !== 'undefined') ? PRANCHA.todosModelos(cfg) : {};
+  return Object.keys(models).map(nome => {
+    const m = models[nome] || {};
+    return {
+      nome,
+      cor: (typeof PRANCHA !== 'undefined' && PRANCHA.rgbParaHex) ? PRANCHA.rgbParaHex(m.cor) : '#384018',
+      atencao: !!m.atencao,
+      rodape: m.rodape || '',
+      caixasSoltas: (m.caixasSoltas || []).slice(),
+      tabelas: (m.tabelas || []).map(t => ({
+        titulo: t.titulo || '', semCheck: !!t.semCheck,
+        itens: (t.itens || []).map(x => String(x == null ? '' : x)),
+        colunas: (t.colunas || []).slice(),
+        // Cores das linhas (só a Serralheria usa) NÃO aparecem no editor, mas
+        // viajam junto pra não sumir ao salvar.
+        cores: t.cores
+      }))
+    };
+  });
+}
+
+async function adminFichas(alvo) {
+  alvo.innerHTML = '<div class="vazio">Carregando as fichas…</div>';
+  // Os modelos vivem no prancha.js (carregado sob demanda). Sem ele, o editor
+  // abriria vazio.
+  try { await ensureModelos(); } catch { alvo.innerHTML = '<div class="aviso vermelho">Não consegui carregar os modelos das fichas.</div>'; return; }
+  // Recarrega do cfg quando abre limpo; mantém as edições enquanto estiver sujo.
+  if (!FICHAS_EDIT || !_fichasSuja) { FICHAS_EDIT = fichasParaEditar(STORE.getCFG()); _fichasSuja = false; }
+  redesenharFichas(alvo);
+}
+
+function htmlTabelaFicha(s, si, tab, ti) {
+  return (
+    '<div class="ficha-edit-tab">' +
+    '<div class="linha-2">' +
+    '<div class="campo"><label>Título da tabela</label><input type="text" data-ftitulo="' + si + '_' + ti + '" value="' + esc(tab.titulo) + '"></div>' +
+    '<div class="campo"><label>Colunas extras (separe por vírgula)</label><input type="text" data-fcolunas="' + si + '_' + ti + '" placeholder="Ex: ESPESSURA, COR" value="' + esc((tab.colunas || []).join(', ')) + '"></div>' +
+    '</div>' +
+    '<label class="chip ' + (tab.semCheck ? 'marcado' : '') + '" data-fsemcheck="' + si + '_' + ti + '" style="margin:2px 0 8px">Só preencher (sem caixa de marcar)</label>' +
+    '<div class="campo"><label>Opções (uma por linha)</label>' +
+    '<textarea rows="5" data-fitens="' + si + '_' + ti + '" placeholder="Uma opção por linha…">' + esc((tab.itens || []).join('\n')) + '</textarea></div>' +
+    '<button class="botao mini perigo fantasma" data-fdeltab="' + si + '_' + ti + '">Apagar esta tabela</button>' +
+    '</div>'
+  );
+}
+
+function htmlSetorFicha(s, si) {
+  return (
+    '<div class="card ficha-edit-setor" data-fsetor="' + si + '">' +
+    '<div class="linha-2">' +
+    '<div class="campo"><label>Nome do setor</label><input type="text" data-fnome="' + si + '" value="' + esc(s.nome) + '"></div>' +
+    '<div class="campo"><label>Cor do selo</label><input type="color" data-fcor="' + si + '" value="' + esc(s.cor) + '" style="height:44px; padding:2px"></div>' +
+    '</div>' +
+    '<div class="linha-2">' +
+    '<div class="campo"><label>&nbsp;</label><label class="chip ' + (s.atencao ? 'marcado' : '') + '" data-fatencao="' + si + '">Barra “ATENÇÃO” no topo</label></div>' +
+    '<div class="campo"><label>Rodapé de liberação</label><select data-frodape="' + si + '">' +
+    RODAPES.map(r => '<option value="' + r[0] + '"' + (s.rodape === r[0] ? ' selected' : '') + '>' + esc(r[1]) + '</option>').join('') +
+    '</select></div>' +
+    '</div>' +
+    (s.caixasSoltas && s.caixasSoltas.length
+      ? '<div class="campo"><label>Caixas avulsas (uma por linha)</label><textarea rows="2" data-fsoltas="' + si + '">' + esc(s.caixasSoltas.join('\n')) + '</textarea></div>'
+      : '') +
+    '<div class="sub-secao" style="margin-top:6px">Tabelas</div>' +
+    (s.tabelas || []).map((t, ti) => htmlTabelaFicha(s, si, t, ti)).join('') +
+    '<button class="botao mini suave" data-faddtab="' + si + '">+ Adicionar tabela</button>' +
+    '<div style="margin-top:12px; border-top:1px solid var(--borda); padding-top:10px">' +
+    '<button class="botao mini perigo" data-fdelsetor="' + si + '">🗑 Apagar o setor “' + esc(s.nome) + '”</button></div>' +
+    '</div>'
+  );
+}
+
+function redesenharFichas(alvo) {
+  alvo.innerHTML =
+    '<div class="card"><p class="dica-campo" style="margin:0">Estas são as fichas que a produção marca em cada prancha. O que você mudar aqui vale pra todo mundo (sincroniza). Ao gerar, a prancha mostra só o que foi marcado. <b>Salve no fim.</b></p></div>' +
+    FICHAS_EDIT.map((s, si) => htmlSetorFicha(s, si)).join('') +
+    '<div style="display:flex; gap:8px; flex-wrap:wrap; margin-top:6px">' +
+    '<button class="botao suave" id="btn-add-setor">+ Novo setor</button>' +
+    '<button class="botao fantasma" id="btn-reset-fichas">↩︎ Voltar ao padrão de fábrica</button>' +
+    '</div>' +
+    '<button class="botao largo" id="btn-salvar-fichas" style="margin-top:14px">Salvar fichas</button>';
+  ligarFichasEditor(alvo);
+}
+
+function ligarFichasEditor(alvo) {
+  const suja = () => { _fichasSuja = true; };
+  const setor = si => FICHAS_EDIT[Number(si)];
+  const tabela = (si, ti) => FICHAS_EDIT[Number(si)].tabelas[Number(ti)];
+
+  // Campos de texto: gravam sem redesenhar (não rouba o foco).
+  $$('[data-fnome]', alvo).forEach(el => el.oninput = () => { setor(el.dataset.fnome).nome = el.value; suja(); });
+  $$('[data-fcor]', alvo).forEach(el => el.oninput = () => { setor(el.dataset.fcor).cor = el.value; suja(); });
+  $$('[data-frodape]', alvo).forEach(el => el.onchange = () => { setor(el.dataset.frodape).rodape = el.value; suja(); });
+  $$('[data-fsoltas]', alvo).forEach(el => el.oninput = () => { setor(el.dataset.fsoltas).caixasSoltas = el.value.split('\n').map(x => x.trim()).filter(Boolean); suja(); });
+  $$('[data-fatencao]', alvo).forEach(el => el.onclick = () => { const s = setor(el.dataset.fatencao); s.atencao = !s.atencao; el.classList.toggle('marcado', s.atencao); suja(); });
+  $$('[data-ftitulo]', alvo).forEach(el => el.oninput = () => { const [si, ti] = el.dataset.ftitulo.split('_'); tabela(si, ti).titulo = el.value; suja(); });
+  $$('[data-fcolunas]', alvo).forEach(el => el.oninput = () => { const [si, ti] = el.dataset.fcolunas.split('_'); tabela(si, ti).colunas = el.value.split(',').map(x => x.trim()).filter(Boolean); suja(); });
+  $$('[data-fitens]', alvo).forEach(el => el.oninput = () => { const [si, ti] = el.dataset.fitens.split('_'); tabela(si, ti).itens = el.value.split('\n').map(x => x.replace(/\s+$/, '')); suja(); });
+  $$('[data-fsemcheck]', alvo).forEach(el => el.onclick = () => { const [si, ti] = el.dataset.fsemcheck.split('_'); const t = tabela(si, ti); t.semCheck = !t.semCheck; el.classList.toggle('marcado', t.semCheck); suja(); });
+
+  // Estruturais: mudam a lista e redesenham.
+  $$('[data-faddtab]', alvo).forEach(el => el.onclick = () => { setor(el.dataset.faddtab).tabelas.push({ titulo: 'NOVA TABELA', semCheck: false, itens: [''], colunas: [] }); suja(); redesenharFichas(alvo); });
+  $$('[data-fdeltab]', alvo).forEach(el => el.onclick = () => {
+    const [si, ti] = el.dataset.fdeltab.split('_');
+    confirmar('Apagar a tabela?', 'Vai remover “' + esc(tabela(si, ti).titulo || 'tabela') + '” deste setor.', 'Apagar', () => {
+      setor(si).tabelas.splice(Number(ti), 1); suja(); redesenharFichas(alvo);
+    }, true);
+  });
+  $$('[data-fdelsetor]', alvo).forEach(el => el.onclick = () => {
+    const si = el.dataset.fdelsetor;
+    confirmar('Apagar o setor?', 'Vai remover “' + esc(setor(si).nome) + '” e a ficha dele. As pranchas já geradas não mudam.', 'Apagar setor', () => {
+      FICHAS_EDIT.splice(Number(si), 1); suja(); redesenharFichas(alvo);
+    }, true);
+  });
+  const addS = $('#btn-add-setor', alvo);
+  if (addS) addS.onclick = () => { FICHAS_EDIT.push({ nome: 'Novo setor', cor: '#384018', atencao: true, rodape: 'producao', caixasSoltas: [], tabelas: [{ titulo: 'MATERIAL', semCheck: false, itens: [''], colunas: [] }] }); suja(); redesenharFichas(alvo); window.scrollTo(0, document.body.scrollHeight); };
+  const reset = $('#btn-reset-fichas', alvo);
+  if (reset) reset.onclick = () => confirmar('Voltar ao padrão de fábrica?', 'Descarta TODAS as suas alterações de fichas e volta pro que veio de origem. Não dá pra desfazer.', 'Voltar ao padrão', () => {
+    FICHAS_EDIT = fichasParaEditar({}); // {} = sem overrides → só o padrão
+    _fichasSuja = true; redesenharFichas(alvo);
+  }, true);
+  const salvar = $('#btn-salvar-fichas', alvo);
+  if (salvar) salvar.onclick = () => salvarFichas(alvo);
+}
+
+function salvarFichas(alvo) {
+  // Valida nomes: sem nome vazio, sem repetido.
+  const nomes = FICHAS_EDIT.map(s => String(s.nome || '').trim());
+  if (nomes.some(n => !n)) { toast('Todo setor precisa de um nome.', 'erro'); return; }
+  const dup = nomes.find((n, i) => nomes.indexOf(n) !== i);
+  if (dup) { toast('Setor repetido: “' + dup + '”. Os nomes têm que ser únicos.', 'erro'); return; }
+
+  const mapa = {};
+  FICHAS_EDIT.forEach(s => {
+    mapa[s.nome.trim()] = {
+      cor: s.cor,
+      atencao: !!s.atencao,
+      rodape: s.rodape || '',
+      caixasSoltas: (s.caixasSoltas || []).filter(Boolean),
+      tabelas: (s.tabelas || []).map(t => {
+        // Mantém linhas em branco INTERNAS (viram campo pra escrever na prancha),
+        // mas descarta as linhas vazias do fim (sobra de digitação).
+        const itens = (t.itens || []).map(x => String(x).replace(/\s+$/, ''));
+        while (itens.length && itens[itens.length - 1] === '') itens.pop();
+        const out = {
+          titulo: (t.titulo || '').trim(),
+          semCheck: !!t.semCheck,
+          itens,
+          colunas: (t.colunas || []).filter(Boolean)
+        };
+        if (t.cores) out.cores = t.cores; // preserva as cores de linha (Serralheria)
+        return out;
+      })
+    };
+  });
+
+  const cfg = STORE.getCFG();
+  cfg.fichasSetores = mapa;
+  // A lista de setores do gerador acompanha as fichas (é o que dá pra gerar).
+  cfg.setoresProducao = FICHAS_EDIT.map(s => s.nome.trim());
+  // O seletor de selo da prévia inclui os setores novos (mantém extras que já existiam).
+  const selos = new Set([...(cfg.tiposServico || []), ...cfg.setoresProducao]);
+  cfg.tiposServico = Array.from(selos);
+  STORE.saveCFG(cfg, SESSAO.nome);
+  _fichasSuja = false;
+  toast('Fichas salvas ✓ (sincronizam pra equipe)', 'sucesso');
+  adminFichas(alvo);
 }
 
 function adminUsuarios(alvo) {

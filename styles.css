@@ -466,6 +466,10 @@ input:focus, select:focus, textarea:focus { outline: none; border-color: var(--i
 .badge.urgente-badge { background: var(--perigo); color: #fff; font-weight: 700; }
 /* Chip de urgência no briefing: só fica vermelho quando marcado */
 .chip.chip-urgente.marcado { background: var(--perigo); color: #fff; border-color: var(--perigo); }
+/* Editor de fichas dos setores (admin) */
+.ficha-edit-setor { border-left: 4px solid var(--indigo); }
+.ficha-edit-tab { border: 1px solid var(--borda); border-radius: 10px; padding: 12px; margin: 8px 0; background: var(--indigo-8); }
+.ficha-edit-tab textarea { font-family: 'Poppins'; }
 .salvo-rodape.erro { color: var(--perigo); }
 .badge.tipo-execucao { background: var(--perigo); color: #fff; }
 .badge.tipo-orcamento { background: var(--azul-bg); color: var(--azul); }
