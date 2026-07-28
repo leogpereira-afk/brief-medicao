@@ -421,13 +421,25 @@ async function boot() {
     location.hash = porPapel[SESSAO.papel] || '#/lista';
   }
   lerRota();
-  renderApp();
-  await STORE.pullCFG();
-  await STORE.pull(() => renderApp());
-  STORE.trySync();
-  // Re-render depois do primeiro pull (listas e cfg fresquinhas)
-  renderApp();
-  setInterval(() => { STORE.pull(atualizarPorSync); }, 60000);
+  renderApp(); // mostra o cache na hora; a rede atualiza quando chegar
+  // Config e lista buscam EM PARALELO (antes era em fila: esperava a config pra
+  // só então buscar a lista -- dois round-trips somados, sentidos no cold start
+  // da manhã). Cada um redesenha quando chega.
+  STORE.pullCFG().then(() => renderApp());
+  STORE.pull(() => renderApp()).then(() => STORE.trySync());
+
+  // Sincronização de fundo: só com o app À VISTA (não gasta bateria/dados em
+  // segundo plano) e sempre reenviando a fila junto (item preso não fica parado).
+  setInterval(() => {
+    if (document.visibilityState && document.visibilityState !== 'visible') return;
+    STORE.pull(atualizarPorSync);
+    STORE.trySync();
+  }, 60000);
+  // Voltar pro app (destravar a tela, trocar de aba) sincroniza na hora, em vez
+  // de esperar até 60s -- é quando o vendedor mais quer ver o estado fresco.
+  document.addEventListener('visibilitychange', () => {
+    if (document.visibilityState === 'visible') { STORE.pull(atualizarPorSync); STORE.trySync(); }
+  });
 }
 
 // Chamado quando a sincronização de fundo traz novidade. Na LISTA, troca só os
@@ -3084,6 +3096,9 @@ function enviarBriefing() {
     }
     const id = BRIEF.id;
     BRIEF = null;
+    // Enviar empurra pro servidor NA HORA (o autosave é agrupado; o envio não
+    // espera a janela de agrupamento).
+    STORE.trySync();
     toast('Briefing enviado pro design ✓ (sincroniza sozinho quando tiver sinal)', 'sucesso');
     location.hash = '#/b/' + id;
   };

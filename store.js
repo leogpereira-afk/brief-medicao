@@ -109,7 +109,11 @@ const STORE = (() => {
     const ok = _setAllOS(all);
     if (!ok) return false;        // sem gravar o cache, não faz sentido enfileirar
     _enqueue({ action: 'upsert', os });
-    trySync();
+    // O dado JÁ está salvo local e na fila. O envio pro servidor é agrupado:
+    // digitar um briefing dispara autosave a cada 600ms, e mandar o briefing
+    // INTEIRO pra rede a cada tecla deixava o app pesado no celular. A fila
+    // garante que nada se perde; só o momento do upload é adiado e coalescido.
+    agendarSync();
     return true;
   }
 
@@ -284,6 +288,23 @@ const STORE = (() => {
 
   // ── Sync state ────────────────────────────────────────────────────────────
   let _syncing = false;
+  let _pulling = false;   // evita pulls sobrepostos (boot + timer + botão manual)
+
+  // Envio agrupado: o primeiro save dispara na hora (send/edição pontual sai
+  // rápido); saves em rajada (digitação) coalescem numa tentativa só no fim da
+  // janela. Como a fila já guardou tudo, adiar o upload nunca perde dado.
+  let _syncTimer = null;
+  let _ultimoSyncMs = 0;
+  const SYNC_THROTTLE = 2500;
+  function agendarSync() {
+    const desde = Date.now() - _ultimoSyncMs;
+    if (desde >= SYNC_THROTTLE) { _ultimoSyncMs = Date.now(); trySync(); return; }
+    if (!_syncTimer) {
+      _syncTimer = setTimeout(() => {
+        _syncTimer = null; _ultimoSyncMs = Date.now(); trySync();
+      }, SYNC_THROTTLE - desde);
+    }
+  }
   let _syncListeners      = [];
   let _conflictListeners  = [];
   let _genericListeners   = {};
@@ -405,6 +426,10 @@ const STORE = (() => {
   // ── pull: busca lista do servidor e mescla ────────────────────────────────
   async function pull(onRefresh) {
     if (!navigator.onLine) return;
+    // Um pull de cada vez. Sem isto, boot + timer de 60s + botão manual podiam
+    // rodar pulls sobrepostos, cada um baixando a lista e redesenhando a tela.
+    if (_pulling) return;
+    _pulling = true;
     try {
       const local = getAllOS();
       const byId = new Map(local.map(o => [o.id, o]));
@@ -497,6 +522,8 @@ const STORE = (() => {
       // Falhou o pull: se o aparelho ESTÁ na internet, quem caiu foi o servidor.
       // Dizer "Offline" mandava o vendedor procurar sinal que já existia.
       _notifySync(navigator.onLine ? 'servidor' : 'offline', getQueue().length);
+    } finally {
+      _pulling = false;
     }
   }
 
