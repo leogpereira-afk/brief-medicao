@@ -913,7 +913,7 @@ function renderLayoutInicio(app) {
 const PROD_VAZIO = {
   osNumero: '', os: null, erroOS: '', buscando: false,
   cliente: '', contato: '', vendedor: '', endereco: '',
-  briefingId: '', busca: '', setores: []
+  briefingId: '', busca: '', setores: [], urgente: false
 };
 let PROD = Object.assign({}, PROD_VAZIO);
 
@@ -999,6 +999,11 @@ function renderLayoutProducao(app) {
       ? '<div class="aviso verde" style="margin-top:8px"><b>' + esc(b.cliente) + '</b>' +
         (b.numeroBrief ? ' · Nº ' + padBrief(b.numeroBrief) : '') +
         ' · ' + (b.itens || []).length + ' item(ns)' +
+        (b.urgente ? ' · <b style="color:var(--perigo)">🔴 URGENTE</b>' : '') +
+        // O prazo que o cliente pediu (o vendedor anotou no briefing): o designer
+        // vê aqui na hora de gerar, sem precisar abrir o briefing inteiro.
+        (b.obsGerais && String(b.obsGerais.prazo || '').trim()
+          ? '<br><span class="dica-campo">⏱ Prazo pedido pelo cliente: <b>' + esc(b.obsGerais.prazo) + '</b></span>' : '') +
         ' <button class="botao mini fantasma" id="pr-trocar" style="margin-left:8px">Desvincular</button></div>'
       : (candidatos.length
         ? '<div class="lista-escolha rolagem-curta">' + candidatos.map(x =>
@@ -1021,6 +1026,10 @@ function renderLayoutProducao(app) {
     '<div class="campo"><label>Vendedor</label><input id="pr-vendedor" type="text" value="' + esc(base.vendedor) + '"></div>' +
     '<div class="campo"><label>Endereço</label><input id="pr-endereco" type="text" value="' + esc(base.endereco) + '"></div>' +
     '</div>' +
+    // Urgência de todas as pranchas deste lote. Vem ligada quando o briefing é
+    // urgente; sem briefing, o designer marca aqui uma vez pra todas.
+    '<div class="campo" style="margin-top:6px"><label>Prioridade</label>' +
+    '<button class="chip chip-urgente ' + (PROD.urgente ? 'marcado' : '') + '" id="pr-urgente">🔴 URGENTE (carimbo em todas)</button></div>' +
     '</div>' +
 
     '<div class="card"><div class="sub-secao">2 · Setores envolvidos</div>' +
@@ -1055,8 +1064,17 @@ function renderLayoutProducao(app) {
   };
   const busca = $('#pr-busca');
   if (busca) busca.oninput = debounce(e => { PROD.busca = e.target.value; renderApp(); }, 300);
-  $$('[data-brief]').forEach(x => x.onclick = () => { PROD.briefingId = x.dataset.brief; renderApp(); });
+  $$('[data-brief]').forEach(x => x.onclick = () => {
+    PROD.briefingId = x.dataset.brief;
+    // Vincular um briefing urgente já liga a prioridade do lote (o designer
+    // ainda pode desligar no toggle).
+    const bb = STORE.getOS(x.dataset.brief);
+    if (bb && bb.urgente) PROD.urgente = true;
+    renderApp();
+  });
   const tr = $('#pr-trocar'); if (tr) tr.onclick = () => { PROD.briefingId = ''; renderApp(); };
+  const urg = $('#pr-urgente');
+  if (urg) urg.onclick = () => { PROD.urgente = !PROD.urgente; urg.classList.toggle('marcado', PROD.urgente); };
   $$('[data-setor]').forEach(ch => ch.onclick = () => {
     const s = ch.dataset.setor;
     const i = PROD.setores.indexOf(s);
@@ -1113,6 +1131,7 @@ async function gerarLoteProducao() {
     tituloServico: setor.toUpperCase(),
     medidas,
     imagem, imagemId: fotoId,
+    urgente: !!PROD.urgente, // o toggle do gerador vale pra todas as pranchas
     numero: i + 1, total
   }));
   LOTE = { modo: 'producao', briefingId: b ? b.id : '', itens, cfg };
@@ -3373,6 +3392,7 @@ function renderDetalhe(app) {
     PROD = Object.assign({}, PROD_VAZIO, {
       briefingId: b.id,
       osNumero: String(b.osNumero || '').trim(),
+      urgente: !!b.urgente, // briefing urgente já liga a prioridade do lote
       mostrarBrief: true,
       _aberto: true
     });
