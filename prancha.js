@@ -412,11 +412,37 @@ const PRANCHA = (() => {
 
   // ── Tabela de checklist do setor ──────────────────────────────────────────
   // `dados` é o que o designer preencheu na prévia:
-  //   { marcas: {i:true}, rotulos: {i:'texto'}, valores: {i:{j:'texto'}} }
-  // Sem `dados`, sai a ficha em branco de sempre (pra preencher à mão).
-  function tabelaCheck(doc, tab, x, y, dados) {
+  //   { marcas:{i:true}, rotulos:{i:'texto'}, valores:{i:{j:'texto'}}, outros:'texto' }
+  //
+  // Quais linhas mostrar. Em modo COMPACTO (o designer marcou algo na prancha),
+  // sai SÓ o que foi escolhido -- a prancha vira um resumo limpo e sobra espaço
+  // pra arte. Sem nada marcado, sai a ficha em branco inteira (pra preencher à
+  // mão). O campo "Outros:" (algo particular) entra como uma linha a mais.
+  function linhasDaTabela(tab, dados, compacto) {
     const d = dados || {};
     const marcas = d.marcas || {}, rotulos = d.rotulos || {}, valores = d.valores || {};
+    const temValor = i => valores[i] && Object.values(valores[i]).some(v => String(v || '').trim());
+    const rows = [];
+    (tab.itens || []).forEach((item, i) => {
+      const livre = !item || /:$/.test(item);
+      const escrito = String(rotulos[i] || '').trim();
+      const incluir = !compacto || (tab.semCheck
+        ? (escrito || temValor(i))
+        : (marcas[i] || (livre && escrito) || temValor(i)));
+      if (!incluir) return;
+      const texto = escrito ? (item && /:$/.test(item) ? item + ' ' + escrito : escrito) : item;
+      rows.push({ i, texto, cor: tab.cores && tab.cores[i], marcado: !!marcas[i] });
+    });
+    const outros = String(d.outros || '').trim();
+    if (outros) rows.push({ i: 'outros', texto: 'Outros: ' + outros, cor: null, marcado: true });
+    return rows;
+  }
+
+  function tabelaCheck(doc, tab, x, y, dados, compacto) {
+    const d = dados || {};
+    const valores = d.valores || {};
+    const rows = linhasDaTabela(tab, dados, compacto);
+    if (compacto && !rows.length) return null; // tabela sem nada marcado some no resumo
     const wCheck = tab.semCheck ? 0 : 15;
     const wRotulo = 128;
     const wCol = 62;
@@ -428,40 +454,31 @@ const PRANCHA = (() => {
     caixa(doc, x, y, largura, hTitulo);
     doc.setFont('Poppins', 'normal'); doc.setFontSize(7.6); doc.setTextColor(...PRETO);
     doc.text(tab.titulo, x + wCheck + wRotulo / 2, y + 10.5, { align: 'center' });
-    // Cabeçalho das colunas extras fica na mesma faixa do título
     cols.forEach((c, i) => {
       const cx = x + wCheck + wRotulo + i * wCol;
       caixa(doc, cx, y, wCol, hTitulo);
-      if (c) {
-        doc.setFontSize(6.6);
-        doc.text(c, cx + wCol / 2, y + 10, { align: 'center' });
-      }
+      if (c) { doc.setFontSize(6.6); doc.text(c, cx + wCol / 2, y + 10, { align: 'center' }); }
     });
 
     let yy = y + hTitulo;
-    tab.itens.forEach((item, i) => {
+    rows.forEach((row) => {
       if (!tab.semCheck) {
         caixa(doc, x, yy, wCheck, hLinha);
-        if (marcas[i]) visto(doc, x, yy, hLinha);
+        // No resumo, tudo que aparece está selecionado → visto. Na ficha em
+        // branco, só o que o designer marcou.
+        if (compacto || row.marcado) visto(doc, x, yy, hLinha);
       }
-      const corFundo = tab.cores && tab.cores[i];
-      if (corFundo) {
-        doc.setFillColor(...corFundo);
-        doc.rect(x + wCheck, yy, wRotulo, hLinha, 'F');
-      }
+      if (row.cor) { doc.setFillColor(...row.cor); doc.rect(x + wCheck, yy, wRotulo, hLinha, 'F'); }
       caixa(doc, x + wCheck, yy, wRotulo, hLinha);
-      // Linha em branco ou terminada em ":" pode ter sido escrita na prévia
-      const escrito = String(rotulos[i] || '').trim();
-      const texto = escrito ? (item && /:$/.test(item) ? item + ' ' + escrito : escrito) : item;
-      if (texto) {
+      if (row.texto) {
         doc.setFont('Poppins', 'normal');
-        doc.setTextColor(...(corFundo ? [255, 255, 255] : PRETO));
-        textoQueCabe(doc, texto, x + wCheck + wRotulo / 2, yy + 9.2, wRotulo - 8, 7.4, 5);
+        doc.setTextColor(...(row.cor ? [255, 255, 255] : PRETO));
+        textoQueCabe(doc, row.texto, x + wCheck + wRotulo / 2, yy + 9.2, wRotulo - 8, 7.4, 5);
       }
       cols.forEach((c, j) => {
         const cx = x + wCheck + wRotulo + j * wCol;
         caixa(doc, cx, yy, wCol, hLinha);
-        const v = valores[i] && valores[i][j];
+        const v = row.i !== 'outros' && valores[row.i] && valores[row.i][j];
         if (v) {
           doc.setFont('Poppins', 'normal'); doc.setTextColor(...PRETO);
           textoQueCabe(doc, String(v), cx + wCol / 2, yy + 9.2, wCol - 6, 7.2, 5);
@@ -469,7 +486,7 @@ const PRANCHA = (() => {
       });
       yy += hLinha;
     });
-    return { altura: yy - y, largura };
+    return { altura: yy - y, largura, nLinhas: rows.length };
   }
 
   // ── Carimbos ──────────────────────────────────────────────────────────────
@@ -545,6 +562,21 @@ const PRANCHA = (() => {
     }
   }
 
+  // A ficha desta prancha tem QUALQUER coisa marcada/escrita? (decide resumo × branco)
+  function fichaTemAlgo(ficha, modelo) {
+    if (!ficha) return false;
+    if (ficha.soltas && Object.values(ficha.soltas).some(Boolean)) return true;
+    const tabs = ficha.tabelas || {};
+    return Object.keys(tabs).some(ti => {
+      const t = tabs[ti] || {};
+      if (String(t.outros || '').trim()) return true;
+      if (t.marcas && Object.values(t.marcas).some(Boolean)) return true;
+      if (t.rotulos && Object.values(t.rotulos).some(v => String(v || '').trim())) return true;
+      if (t.valores && Object.values(t.valores).some(col => Object.values(col || {}).some(v => String(v || '').trim()))) return true;
+      return false;
+    });
+  }
+
   // ── Uma prancha ───────────────────────────────────────────────────────────
   async function desenhar(doc, p, cfg) {
     const modelo = modeloDe(p.seloServico || p.setor);
@@ -568,6 +600,11 @@ const PRANCHA = (() => {
     // MEDIDAS e "Exportado com:" sumiam da folha, levando junto o que o
     // designer tinha marcado nelas. Perder marcação em silêncio é pior do que
     // uma prancha apertada.
+    // Modo COMPACTO: se o designer marcou qualquer coisa na ficha, a prancha
+    // sai como RESUMO (só o marcado). Sem nada marcado, sai a ficha em branco
+    // inteira pra preencher à mão. O resumo é o que sobra espaço pra arte.
+    const compacto = fichaTemAlgo(ficha, modelo);
+
     const X0 = M + 4;
     const LIMITE_TABELAS = W * 0.58;   // depois disto não sobra corpo pro desenho
     let colX = X0;
@@ -576,8 +613,10 @@ const PRANCHA = (() => {
     let larguraTabelas = 0;     // quanto o bloco todo ocupa (pra afastar a arte)
 
     (modelo.caixasSoltas || []).forEach((rot, i) => {
+      const marcada = !!(ficha.soltas && ficha.soltas[i]);
+      if (compacto && !marcada) return; // no resumo só entra a caixa marcada
       caixa(doc, colX, yTab, 16, 16);
-      if (ficha.soltas && ficha.soltas[i]) visto(doc, colX, yTab, 16);
+      if (marcada) visto(doc, colX, yTab, 16);
       doc.setFont('Poppins', 'normal'); doc.setFontSize(8.4); doc.setTextColor(...PRETO);
       doc.text(rot, colX + 22, yTab + 11.5);
       yTab += 24;
@@ -587,24 +626,28 @@ const PRANCHA = (() => {
     const tabelas = modelo.tabelas || [];
     for (let ti = 0; ti < tabelas.length; ti++) {
       const tab = tabelas[ti];
-      // Altura da tabela ANTES de desenhar: é o que decide se ela abre coluna.
-      const alturaPrevista = 15 + (tab.itens || []).length * 13.5;
+      const dados = (ficha.tabelas || {})[ti];
+      // Quantas linhas essa tabela vai desenhar (pra decidir a quebra de coluna).
+      const nLinhas = linhasDaTabela(tab, dados, compacto).length;
+      if (compacto && !nLinhas) continue; // tabela sem nada marcado some no resumo
+      const alturaPrevista = 15 + nLinhas * 13.5;
       const comecouAColuna = yTab > yCorpo + 4;
       if (comecouAColuna && yTab + alturaPrevista > yFimCorpo - 6) {
         const proximoX = colX + larguraCol + 12;
-        // Só abre coluna nova se ainda sobrar página pro desenho.
         if (proximoX < LIMITE_TABELAS) {
           larguraTabelas = Math.max(larguraTabelas, proximoX - X0);
           colX = proximoX; yTab = yCorpo + 4; larguraCol = 0;
         }
       }
-      const r = tabelaCheck(doc, tab, colX, yTab, (ficha.tabelas || {})[ti]);
+      const r = tabelaCheck(doc, tab, colX, yTab, dados, compacto);
+      if (!r) continue;
       yTab += r.altura + 12;
       larguraCol = Math.max(larguraCol, r.largura);
       larguraTabelas = Math.max(larguraTabelas, colX - X0 + larguraCol);
     }
 
-    // Área do desenho: à direita das tabelas
+    // Área do desenho: à direita das tabelas. No resumo as tabelas são curtas,
+    // então a arte ganha muito mais largura -- é aqui que o JPG é valorizado.
     const xArte = M + 8 + (larguraTabelas ? larguraTabelas + 16 : 0);
     const wArte = W - M - 8 - xArte;
     const hArte = yFimCorpo - yCorpo - 8;
@@ -614,7 +657,11 @@ const PRANCHA = (() => {
       const prop = dims ? dims.h / dims.w : 0.72;
       let w = wArte, h = w * prop;
       if (h > hArte) { h = hArte; w = h / prop; }
-      try { doc.addImage(p.imagem, 'JPEG', xArte + (wArte - w) / 2, yCorpo + (hArte - h) / 2, w, h, undefined, 'FAST'); } catch {}
+      const ix = xArte + (wArte - w) / 2, iy = yCorpo + (hArte - h) / 2;
+      try { doc.addImage(p.imagem, 'JPEG', ix, iy, w, h, undefined, 'FAST'); } catch {}
+      // Moldura fina: a arte fica com cara de peça, não de imagem solta na folha.
+      doc.setDrawColor(...BORDA); doc.setLineWidth(0.8);
+      doc.rect(ix, iy, w, h);
     }
 
     // Título do serviço e medidas, quando informados (vão sobre a área da arte)

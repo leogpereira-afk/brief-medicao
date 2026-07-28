@@ -1257,6 +1257,7 @@ function htmlFichaSetor(p, i) {
   const marcado = (ti, li) => !!((f.tabelas[ti] || {}).marcas || {})[li];
   const escrito = (ti, li) => String((((f.tabelas[ti] || {}).rotulos) || {})[li] || '');
   const valor = (ti, li, ci) => String(((((f.tabelas[ti] || {}).valores) || {})[li] || {})[ci] || '');
+  const outros = (ti) => String((f.tabelas[ti] || {}).outros || '');
 
   return (
     soltas.map((rot, si) =>
@@ -1289,6 +1290,15 @@ function htmlFichaSetor(p, i) {
             ' placeholder="' + esc(c || '—') + '" value="' + esc(valor(ti, li, ci)) + '">').join('') +
           '</' + tag + '>';
       }).join('') +
+      // "Outros" universal: qualquer tabela aceita algo particular. Não repete
+      // onde já existe um "Outros:" nativo (ex.: SUPERFÍCIES da Instalação).
+      ((tab.itens || []).some(x => /^outros:?$/i.test(String(x || '').trim()))
+        ? ''
+        : '<div class="linha-check outros-linha">' +
+          '<span class="rotulo-check curto">+ Outros:</span>' +
+          '<input class="campo-livre" type="text" data-outros="' + ti + '" data-pi="' + i + '"' +
+          ' placeholder="algo particular deste trabalho…" value="' + esc(outros(ti)) + '">' +
+          '</div>') +
       '</div>').join('')
   );
 }
@@ -1320,6 +1330,9 @@ function ligarFicha(raiz, m) {
     const cb = $('[data-marca="' + ti + '_' + li + '"][data-pi="' + el.dataset.pi + '"]', m || raiz);
     if (el.value.trim() && cb && !cb.checked) { cb.checked = true; t.marcas[li] = true; }
   });
+  $$('[data-outros]', raiz).forEach(el => el.oninput = () => {
+    fichaTab(LOTE.itens[Number(el.dataset.pi)], Number(el.dataset.outros)).outros = el.value;
+  });
 }
 
 // A ficha de UMA prancha tem algo marcado/escrito?
@@ -1328,6 +1341,7 @@ function loteFichaMarcada(p) {
   if (!f) return false;
   if (Object.values(f.soltas || {}).some(Boolean)) return true;
   return Object.values(f.tabelas || {}).some(t =>
+    String(t.outros || '').trim() ||
     Object.values(t.marcas || {}).some(Boolean) ||
     Object.values(t.rotulos || {}).some(v => String(v || '').trim()) ||
     Object.values(t.valores || {}).some(col => Object.values(col || {}).some(v => String(v || '').trim())));
