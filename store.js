@@ -710,13 +710,23 @@ const STORE = (() => {
 
   function importarBackup(data) {
     if (!data || !Array.isArray(data.os)) throw new Error('Arquivo inválido');
-    _setAllOS(data.os);
+    const ok = _setAllOS(data.os);
+    if (!ok) throw new Error('Não coube no armazenamento do aparelho');
     if (data.cfg) lsSet(K.CFG, data.cfg);
-    // Limpa a fila pendente — referências a IDs que sumiram no backup virariam
-    // erros eternos no servidor; o pull seguinte re-sincroniza o que faltar.
+    // Zera a fila ANTES: referências a IDs que sumiram no backup virariam erros
+    // eternos no servidor.
     lsSet(K.FILA, []);
     _flagged.clear();
     _failCount.clear();
+    // E RE-ENFILEIRA tudo que veio no arquivo. Sem isto o import não restaurava
+    // nada de verdade: os registros não estavam no servidor nem na fila, e o
+    // primeiro pull (menos de um minuto depois) os varria do cache como se
+    // tivessem sido apagados em outro aparelho. Na fila eles entram em
+    // `pendingIds`, sobrevivem à varredura e sobem pro servidor.
+    for (const os of data.os) {
+      if (os && os.id) _enqueue({ action: 'upsert', os });
+    }
+    agendarSync();
   }
 
   // ── UUID v4 cripto-seguro (fallback p/ Math.random em ambientes antigos) ──

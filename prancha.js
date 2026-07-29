@@ -503,12 +503,19 @@ const PRANCHA = (() => {
     // preenchida (nem caixa, nem campo). Se a filtrássemos no resumo, a lista
     // simplesmente sumiria da prancha -- então essas linhas sempre entram.
     const semOndePreencher = tab.semCheck && !(tab.colunas || []).length;
+    // Tabela "só preencher" é grade que a FÁBRICA completa à mão (Plano de
+    // Corte, Suportes, COLORIDO, ACRÍLICO...). O designer não tem caixa pra
+    // dizer "essa vale" -- só preencher. Então ela nunca some no resumo: se ele
+    // escreveu algo, sai só o escrito; se não mexeu, sai a grade EM BRANCO, que
+    // é justamente pra ser preenchida no chão de fábrica.
+    const preenchida = tab.semCheck && (tab.itens || []).some((_, i) =>
+      String(rotulos[i] || '').trim() || temValor(i));
     const rows = [];
     (tab.itens || []).forEach((item, i) => {
       const livre = !item || /:$/.test(item);
       const escrito = String(rotulos[i] || '').trim();
       const incluir = !compacto || (tab.semCheck
-        ? (escrito || temValor(i) || (semOndePreencher && !livre))
+        ? (!preenchida || escrito || temValor(i) || (semOndePreencher && !livre))
         : (marcas[i] || (livre && escrito) || temValor(i)));
       if (!incluir) return;
       const texto = escrito ? (item && /:$/.test(item) ? item + ' ' + escrito : escrito) : item;
@@ -705,12 +712,13 @@ const PRANCHA = (() => {
     const modelo = modeloDe(p.seloServico || p.setor, cfg);
     const ficha = p.ficha || {};          // o que o designer marcou na prévia
     let y = cabecalho(doc, p, cfg, modelo);
-    if (modelo.atencao) {
-      y = barraAtencao(doc, y);
-      // Setor de produção não tem linha de endereço; a obs, quando existe,
-      // ganha uma faixa própria em vez de se perder.
-      y = linhaSoObs(doc, p, y);
-    } else if (modelo.enderecoObs) y = linhaEnderecoObs(doc, p, y);
+    if (modelo.atencao) y = barraAtencao(doc, y);
+    // A obs digitada na prévia SEMPRE chega ao papel. Onde o modelo tem linha de
+    // endereço ela viaja junto; nos demais ganha uma faixa própria (que só
+    // aparece se houver texto). Antes, setor sem barra de ATENÇÃO E sem endereço
+    // -- a Serralheria -- caía fora dos dois casos e a obs se perdia.
+    if (modelo.enderecoObs) y = linhaEnderecoObs(doc, p, y);
+    else y = linhaSoObs(doc, p, y);
 
     const yCorpo = y + 6;
     const yFimCorpo = H - 34;

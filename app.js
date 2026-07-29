@@ -1156,11 +1156,18 @@ async function buscarOSProducao() {
     if (res && res.encontrado && res.os) {
       PROD.os = res.os;
       // Só preenche o que o designer ainda não digitou: nunca sobrescreve
-      // correção feita à mão.
-      if (!PROD.cliente) PROD.cliente = res.os.cliente || '';
-      if (!PROD.contato) PROD.contato = res.os.contato || '';
-      if (!PROD.vendedor) PROD.vendedor = res.os.vendedor || '';
-      if (!PROD.endereco) PROD.endereco = res.os.endereco || '';
+      // correção feita à mão. MAS se ele trocou de O.S. (buscou outro número),
+      // é outro trabalho: aí o cabeçalho inteiro vem da O.S. nova, senão o
+      // cliente anterior gruda e a prancha sai com o nome errado.
+      const outroTrabalho = PROD.osPreenchida && PROD.osPreenchida !== numero;
+      const por = (campo, valor) => {
+        if (outroTrabalho || !PROD[campo]) PROD[campo] = valor || '';
+      };
+      por('cliente', res.os.cliente);
+      por('contato', res.os.contato);
+      por('vendedor', res.os.vendedor);
+      por('endereco', res.os.endereco);
+      PROD.osPreenchida = numero;
       toast('O.S. ' + numero + ' encontrada ✓', 'sucesso');
     } else {
       PROD.os = null;
@@ -1394,11 +1401,17 @@ async function buscarOSProjeto() {
     const res = await STORE.apiFn('mubisys', { action: 'buscarOS', numero });
     if (res && res.encontrado && res.os) {
       PROJ.os = res.os;
-      // Só preenche o que ainda não foi digitado à mão.
-      if (!PROJ.cliente) PROJ.cliente = res.os.cliente || '';
-      if (!PROJ.contato) PROJ.contato = res.os.contato || '';
-      if (!PROJ.vendedor) PROJ.vendedor = res.os.vendedor || '';
-      if (!PROJ.endereco) PROJ.endereco = res.os.endereco || '';
+      // Só preenche o que ainda não foi digitado à mão -- mas trocando de O.S.
+      // o cabeçalho inteiro é substituído (ver buscarOSProducao).
+      const outroTrabalho = PROJ.osPreenchida && PROJ.osPreenchida !== numero;
+      const por = (campo, valor) => {
+        if (outroTrabalho || !PROJ[campo]) PROJ[campo] = valor || '';
+      };
+      por('cliente', res.os.cliente);
+      por('contato', res.os.contato);
+      por('vendedor', res.os.vendedor);
+      por('endereco', res.os.endereco);
+      PROJ.osPreenchida = numero;
       toast('O.S. ' + numero + ' encontrada ✓', 'sucesso');
     } else {
       PROJ.os = null;
@@ -1627,7 +1640,13 @@ function abrirPreviaLote() {
     '<div class="campo"><label>Cliente</label><input id="lote-cliente" type="text" value="' + esc(cab.cliente || '') + '"></div>' +
     '<div class="campo"><label>Contato</label><input id="lote-contato" type="text" value="' + esc(cab.contato || '') + '"></div>' +
     '</div>' +
+    '<div class="linha-2">' +
+    '<div class="campo"><label>Vendedor</label><input id="lote-vendedor" type="text" value="' + esc(cab.vendedor || '') + '"></div>' +
     '<div class="campo"><label>O.S. (se tiver)</label><input id="lote-os" type="text" inputmode="numeric" value="' + esc(cab.osNumero || '') + '"></div>' +
+    '</div>' +
+    // Endereço sai impresso nas pranchas de Instalação/Serralheria: se a O.S.
+    // trouxer o endereço de cobrança em vez do da obra, dá pra corrigir aqui.
+    '<div class="campo"><label>Endereço</label><input id="lote-endereco" type="text" value="' + esc(cab.endereco || '') + '"></div>' +
     '</div>' +
     '<div id="lote-lista" style="margin-top:12px">' +
     LOTE.itens.map((p, i) =>
@@ -1673,6 +1692,8 @@ function abrirPreviaLote() {
   const setCab = (campo, val) => LOTE.itens.forEach(p => { p[campo] = val; });
   $('#lote-cliente', m).oninput = e => setCab('cliente', e.target.value);
   $('#lote-contato', m).oninput = e => setCab('contato', e.target.value);
+  $('#lote-vendedor', m).oninput = e => setCab('vendedor', e.target.value);
+  $('#lote-endereco', m).oninput = e => setCab('endereco', e.target.value);
   $('#lote-os', m).oninput = e => setCab('osNumero', e.target.value.trim());
 
   // Guarda o selo anterior de cada select, pra confirmar antes de trocar a ficha.
@@ -1781,13 +1802,14 @@ function abrirPreviaLote() {
     outros.forEach(b => b.disabled = true);
     const txt = btn.textContent; btn.textContent = 'Gerando…';
     try {
-      const eraProjeto = LOTE && LOTE.modo === 'projeto';
       const ok = await exportarLote(separados);
       if (ok !== false) {
-        // Exportou: limpa as artes do modo Projeto. Sem isto, o designer que
-        // continuava na tela e vinculava OUTRO cliente exportava o PDF novo
-        // com as artes do cliente anterior.
-        if (eraProjeto) { PROJ.imagens = []; PROJ.briefingId = ''; PROJ.busca = ''; }
+        // Exportou: a mesa do gerador volta pro zero. Sem isto o designer que
+        // continuava na tela e digitava OUTRA O.S. levava junto o cabeçalho
+        // (cliente, contato, vendedor, endereço) e as artes do trabalho
+        // anterior -- e a prancha saía com o nome do cliente errado.
+        PROD = Object.assign(prodVazio(), { _aberto: PROD._aberto });
+        PROJ = Object.assign(projVazio(), { _aberto: PROJ._aberto });
         m.remove(); // fechou só porque deu certo
       } else { outros.forEach(b => b.disabled = false); btn.textContent = txt; }
     } catch (e) {
@@ -3408,6 +3430,25 @@ function enviarBriefing() {
 
 /* ══════════════════ Detalhe ══════════════════ */
 
+// Grava uma mudança num briefing SEM levar junto um retrato velho da tela.
+// Os botões do detalhe seguram o objeto do momento em que a tela foi montada;
+// se entre a montagem e o clique alguma outra ação gravou algo (gerar uma nova
+// versão da prancha, autosave, sync), salvar aquele objeto capturado apagaria
+// o que veio depois -- foi assim que uma prancha corrigida sumia ao mexer no
+// status. Então relemos do store, aplicamos a mudança em cima do ATUAL, e
+// deixamos o objeto da tela em dia pro próximo clique.
+function gravarBriefing(b, mudar) {
+  if (!b) return false;
+  const atual = (b.id && STORE.getOS(b.id)) || b;
+  const alvo = JSON.parse(JSON.stringify(atual));
+  if (mudar) mudar(alvo);
+  alvo.atualizadoEm = new Date().toISOString();
+  if (SESSAO) alvo.atualizadoPor = SESSAO.nome;
+  const ok = STORE.saveOS(alvo);
+  Object.assign(b, JSON.parse(JSON.stringify(alvo)));
+  return ok;
+}
+
 function renderDetalhe(app) {
   const b = STORE.getOS(ROTA.id);
   if (!b) { toast('Briefing não encontrado neste aparelho. Sincronize e tente de novo.', 'erro'); location.hash = '#/lista'; return; }
@@ -3613,8 +3654,7 @@ function renderDetalhe(app) {
   if (rep) rep.onclick = () => abrirEscolhaDesigner(
     'Direcionar pra qual designer?', b.designerAtribuido,
     (u) => {
-      atribuirDesigner(b, u);
-      STORE.saveOS(b);
+      gravarBriefing(b, alvo => atribuirDesigner(alvo, u));
       renderApp();
       toast(u ? 'Briefing direcionado pra ' + u.nome + ' ✓' : 'Briefing liberado pra qualquer designer ✓', 'sucesso');
     });
@@ -3669,10 +3709,7 @@ function renderDetalhe(app) {
   });
   const sel = $('#sel-status');
   if (sel) sel.onchange = () => {
-    b.status = sel.value;
-    b.atualizadoEm = new Date().toISOString();
-    b.atualizadoPor = SESSAO.nome;
-    STORE.saveOS(JSON.parse(JSON.stringify(b)));
+    gravarBriefing(b, alvo => { alvo.status = sel.value; });
     toast('Status: ' + b.status, 'sucesso');
     renderApp();
   };
@@ -3683,11 +3720,10 @@ function renderDetalhe(app) {
   const lix = $('#btn-lixeira');
   if (lix) lix.onclick = () => confirmar('Mover pra lixeira',
     'O briefing sai das listas e fica 30 dias recuperável na lixeira do admin. Depois disso é apagado de vez.', 'Mover', () => {
-      b.apagadoEm = new Date().toISOString();
-      b.apagadoPor = SESSAO.nome;
-      b.atualizadoEm = new Date().toISOString();
-      b.atualizadoPor = SESSAO.nome;
-      STORE.saveOS(JSON.parse(JSON.stringify(b)));
+      gravarBriefing(b, alvo => {
+        alvo.apagadoEm = new Date().toISOString();
+        alvo.apagadoPor = SESSAO.nome;
+      });
       toast('Movido pra lixeira');
       location.hash = '#/lista';
     }, true);
@@ -3709,12 +3745,11 @@ function abrirDevolver(b) {
   $('.btn-ok', m).onclick = () => {
     const motivo = $('#dev-motivo', m).value.trim();
     if (!motivo) { toast('Escreva o que precisa ser corrigido.', 'erro'); return; }
-    b.situacao = 'rascunho';
-    b.status = '';
-    b.devolucao = { por: SESSAO.nome, em: new Date().toISOString(), motivo };
-    b.atualizadoEm = new Date().toISOString();
-    b.atualizadoPor = SESSAO.nome;
-    STORE.saveOS(JSON.parse(JSON.stringify(b)));
+    gravarBriefing(b, alvo => {
+      alvo.situacao = 'rascunho';
+      alvo.status = '';
+      alvo.devolucao = { por: SESSAO.nome, em: new Date().toISOString(), motivo };
+    });
     m.remove();
     toast('Devolvido pro vendedor ✓', 'sucesso');
     renderApp();
@@ -3735,15 +3770,14 @@ function abrirVincularOS(b) {
   const salvar = (origem, servico) => {
     const numero = $('#v-numero', m).value.trim();
     const mudou = numero !== (b.osNumero || '');
-    b.osNumero = numero;
-    b.semOS = !numero;
-    if (origem) b.osOrigem = origem; else if (mudou) b.osOrigem = '';
-    // Serviço só vale pra O.S. que o buscou. Trocou o número sem buscar? Limpa,
-    // senão o serviço da O.S. antiga sai errado na ficha e no PDF.
-    if (servico) b.osServico = servico; else if (mudou) b.osServico = '';
-    b.atualizadoEm = new Date().toISOString();
-    b.atualizadoPor = SESSAO.nome;
-    STORE.saveOS(JSON.parse(JSON.stringify(b)));
+    gravarBriefing(b, alvo => {
+      alvo.osNumero = numero;
+      alvo.semOS = !numero;
+      if (origem) alvo.osOrigem = origem; else if (mudou) alvo.osOrigem = '';
+      // Serviço só vale pra O.S. que o buscou. Trocou o número sem buscar? Limpa,
+      // senão o serviço da O.S. antiga sai errado na ficha e no PDF.
+      if (servico) alvo.osServico = servico; else if (mudou) alvo.osServico = '';
+    });
     m.remove();
     toast(numero ? 'O.S. ' + numero + ' vinculada ✓' : 'Número removido', 'sucesso');
     renderApp();
@@ -4214,7 +4248,7 @@ function adminArquivos(alvo) {
       confirmar('Substituir tudo por este backup?', aviso, 'Substituir', () => {
         try {
           STORE.importarBackup(dados);
-          toast('Backup importado ✓ (' + dados.os.length + ' briefings)', 'sucesso');
+          toast('Backup importado ✓ (' + dados.os.length + ' briefings) — subindo pro servidor…', 'sucesso');
           renderApp();
         } catch (err) { toast('Não consegui importar: ' + err.message, 'erro'); }
       }, true);
