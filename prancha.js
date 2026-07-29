@@ -73,8 +73,12 @@ const PRANCHA = (() => {
       cor: [166, 166, 166], corTexto: [40, 40, 40],
       atencao: false, enderecoObs: false, rotuloData: 'Data:', endEntregaNoCabecalho: true,
       tabelas: [
-        T('Plano de Corte', ['Metalom', 'Metalom', 'Metalom'], ['Chapa', 'DIM', 'Medida', 'QTD', 'Corte'], { semCheck: true }),
-        T('Aço', ['Metalom 20x20', 'Metalom 20x30', 'Metalom 50x30', 'Alumínio 50x25', 'Perfil 50x25'], ['n°/ Barras', ''], {
+        // Plano de corte: linhas EM BRANCO pra escrever o material. Antes vinham
+        // três "Metalom" fixos e repetidos, que não diziam nada e ainda ocupavam
+        // a coluna onde o serralheiro precisa escrever a peça.
+        T('Plano de Corte', ['', '', '', ''], ['Chapa', 'DIM', 'Medida', 'QTD', 'Corte'], { semCheck: true }),
+        // A 2ª coluna era '' (sem título): virava uma coluna fantasma na folha.
+        T('Aço', ['Metalom 20x20', 'Metalom 20x30', 'Metalom 50x30', 'Alumínio 50x25', 'Perfil 50x25'], ['n°/ Barras'], {
           cores: [[64, 64, 64], [232, 62, 100], [46, 204, 154], [86, 74, 168], [237, 139, 47]], semCheck: true
         }),
         T('Suportes', ['Mão francesa', 'Suporte'], ['Medida', 'QTD'], { cores: [[41, 171, 226], [41, 171, 226]], semCheck: true })
@@ -576,8 +580,16 @@ const PRANCHA = (() => {
     return fs;
   }
 
+  // Disco branco por trás do carimbo: ele fica EM CIMA da arte, e sobre uma
+  // imagem escura o vermelho/azul sumia. A borda branca destaca sem tapar a peça.
+  function fundoCarimbo(doc, x, y, r) {
+    doc.setFillColor(255, 255, 255);
+    doc.circle(x, y, r + 5, 'F');
+  }
+
   function carimboUrgente(doc, x, y) {
     const r = 32;
+    fundoCarimbo(doc, x, y, r);
     doc.setDrawColor(...VERMELHO); doc.setLineWidth(2.4);
     doc.circle(x, y, r, 'S');
     doc.setLineWidth(1);
@@ -589,6 +601,7 @@ const PRANCHA = (() => {
   function carimboEspelhado(doc, x, y) {
     const AZUL = [41, 171, 226];
     const r = 46;
+    fundoCarimbo(doc, x, y, r);
     doc.setDrawColor(...AZUL); doc.setLineWidth(2.2);
     doc.circle(x, y, r, 'S');
     doc.setLineWidth(1.1);
@@ -703,6 +716,7 @@ const PRANCHA = (() => {
     let yTab = yCorpo + 4;
     let larguraCol = 0;         // largura da coluna que está sendo preenchida
     let larguraTabelas = 0;     // quanto o bloco todo ocupa (pra afastar a arte)
+    let yTabFundo = yCorpo + 4; // onde a tabela mais baixa termina
 
     (modelo.caixasSoltas || []).forEach((rot, i) => {
       const marcada = !!(ficha.soltas && ficha.soltas[i]);
@@ -736,13 +750,27 @@ const PRANCHA = (() => {
       yTab += r.altura + 12;
       larguraCol = Math.max(larguraCol, r.largura);
       larguraTabelas = Math.max(larguraTabelas, colX - X0 + larguraCol);
+      yTabFundo = Math.max(yTabFundo, yTab);   // onde as tabelas terminam
     }
 
-    // Área do desenho: à direita das tabelas. No resumo as tabelas são curtas,
-    // então a arte ganha muito mais largura -- é aqui que o JPG é valorizado.
-    const xArte = M + 8 + (larguraTabelas ? larguraTabelas + 16 : 0);
+    // Onde a arte entra. Duas situações:
+    //  · tabelas ALTAS (Instalação, vinil): a arte fica ao lado, como sempre.
+    //  · tabelas CURTAS (Serralheria, ou qualquer resumo enxuto): a arte DESCE e
+    //    usa a largura inteira. Antes ela ficava espremida na coluna da direita
+    //    e metade da folha saía vazia -- justo no setor em que o desenho técnico
+    //    é o que mais importa.
+    const alturaCorpo = yFimCorpo - yCorpo;
+    // 0,6 = as tabelas usam menos de 60% da altura do corpo. Acima disso (ex.:
+    // Instalação, com 27 linhas) a arte continua ao lado, senão ficaria achatada.
+    const tabelasCurtas = larguraTabelas > 0 && (yTabFundo - yCorpo) < alturaCorpo * 0.6;
+    const xArte = tabelasCurtas ? M + 8 : M + 8 + (larguraTabelas ? larguraTabelas + 16 : 0);
     const wArte = W - M - 8 - xArte;
-    const hArte = yFimCorpo - yCorpo - 8;
+    // Com as tabelas curtas o título fica ao lado delas (aproveita o topo) e a
+    // arte começa abaixo de tudo.
+    const yTopoArte = tabelasCurtas ? yTabFundo + 6 : yCorpo;
+    const xTitulo = tabelasCurtas ? M + 8 + larguraTabelas + 16 : xArte;
+    const wTitulo = W - M - 8 - xTitulo;
+    const hArte = yFimCorpo - yTopoArte - 8;
 
     // O título e as medidas RESERVAM espaço antes da imagem entrar. Antes eram
     // desenhados por cima da arte (posição fixa), e o texto ficava ilegível em
@@ -751,9 +779,11 @@ const PRANCHA = (() => {
     let titLinhas = [];
     if (p.tituloServico) {
       doc.setFont('Poppins', 'bold'); doc.setFontSize(TIT_FS);
-      titLinhas = doc.splitTextToSize(String(p.tituloServico).toUpperCase(), wArte).slice(0, 2);
+      titLinhas = doc.splitTextToSize(String(p.tituloServico).toUpperCase(), wTitulo).slice(0, 2);
     }
-    const altTitulo = titLinhas.length ? titLinhas.length * TIT_LH + 6 : 0;
+    // Com as tabelas curtas o título fica ao LADO delas, então não rouba altura
+    // da arte; com as tabelas altas ele fica em cima da arte e reserva espaço.
+    const altTitulo = (titLinhas.length && !tabelasCurtas) ? titLinhas.length * TIT_LH + 6 : 0;
 
     // Medidas: encolhe até TODAS as linhas caberem (medida cortada faz a
     // produção cortar material a menos).
@@ -770,14 +800,14 @@ const PRANCHA = (() => {
     }
     const altMedidas = medLinhas.length ? medLinhas.length * (medFs + 2.4) + 8 : 0;
 
-    // Título no topo da coluna da arte
+    // Título: ao lado das tabelas (curtas) ou no topo da coluna da arte (altas).
     if (titLinhas.length) {
       doc.setFont('Poppins', 'bold'); doc.setFontSize(TIT_FS); doc.setTextColor(...PRETO);
-      titLinhas.forEach((l, i) => doc.text(l, xArte, yCorpo + TIT_FS + i * TIT_LH));
+      titLinhas.forEach((l, i) => doc.text(l, xTitulo, yCorpo + TIT_FS + i * TIT_LH));
     }
 
     // A imagem fica no que sobrou ENTRE o título e as medidas.
-    const yImg = yCorpo + altTitulo;
+    const yImg = yTopoArte + altTitulo;
     const hImg = Math.max(40, hArte - altTitulo - altMedidas);
     if (p.imagem) {
       const dims = await medirImagem(p.imagem);
