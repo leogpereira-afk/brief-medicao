@@ -1292,10 +1292,27 @@ function fichaDe(p) {
   if (!p.ficha) p.ficha = { tabelas: {}, soltas: {} };
   return p.ficha;
 }
+// A ficha é guardada por CHAVE DO TÍTULO, não pela posição da tabela. Com
+// posição, mexer nas fichas no admin (reordenar/remover uma tabela) fazia a
+// marcação de uma prancha antiga reaparecer na tabela ERRADA ou sumir calada
+// ao regerar. `chaveTabela` é a mesma no app e no prancha.js.
+function chaveTabela(modelo, ti) {
+  const tab = modelo && (modelo.tabelas || [])[ti];
+  const t = tab && String(tab.titulo || '').trim();
+  return t ? 't:' + norm(t) : String(ti);
+}
 function fichaTab(p, ti) {
   const f = fichaDe(p);
-  if (!f.tabelas[ti]) f.tabelas[ti] = { marcas: {}, rotulos: {}, valores: {} };
-  return f.tabelas[ti];
+  const k = chaveTabela(modeloDaPrancha(p), ti);
+  // Migra o que foi gravado por posição antes desta mudança.
+  if (!f.tabelas[k] && f.tabelas[ti]) { f.tabelas[k] = f.tabelas[ti]; delete f.tabelas[ti]; }
+  if (!f.tabelas[k]) f.tabelas[k] = { marcas: {}, rotulos: {}, valores: {} };
+  return f.tabelas[k];
+}
+// Leitura (sem criar): tenta a chave nova e cai pra posição nas pranchas velhas.
+function fichaTabLer(p, modelo, ti) {
+  const f = p.ficha || { tabelas: {} };
+  return (f.tabelas || {})[chaveTabela(modelo, ti)] || (f.tabelas || {})[ti] || {};
 }
 
 // A ficha do setor, clicável. Cada linha do modelo vira uma linha de verdade:
@@ -1310,10 +1327,12 @@ function htmlFichaSetor(p, i) {
     return '<p class="dica-campo">Este setor não tem ficha própria — a prancha sai só com o cabeçalho e o desenho.</p>';
   }
   const f = p.ficha || { tabelas: {}, soltas: {} };
-  const marcado = (ti, li) => !!((f.tabelas[ti] || {}).marcas || {})[li];
-  const escrito = (ti, li) => String((((f.tabelas[ti] || {}).rotulos) || {})[li] || '');
-  const valor = (ti, li, ci) => String(((((f.tabelas[ti] || {}).valores) || {})[li] || {})[ci] || '');
-  const outros = (ti) => String((f.tabelas[ti] || {}).outros || '');
+  // Lê pela chave do título (com queda pra posição nas pranchas antigas).
+  const tb = (ti) => fichaTabLer(p, modelo, ti);
+  const marcado = (ti, li) => !!((tb(ti).marcas) || {})[li];
+  const escrito = (ti, li) => String(((tb(ti).rotulos) || {})[li] || '');
+  const valor = (ti, li, ci) => String((((tb(ti).valores) || {})[li] || {})[ci] || '');
+  const outros = (ti) => String(tb(ti).outros || '');
 
   return (
     soltas.map((rot, si) =>
@@ -3657,6 +3676,12 @@ function fichasParaEditar(cfg) {
       cor: (typeof PRANCHA !== 'undefined' && PRANCHA.rgbParaHex) ? PRANCHA.rgbParaHex(m.cor) : '#384018',
       atencao: !!m.atencao,
       rodape: m.rodape || '',
+      // Flags de layout do cabeçalho: não aparecem no editor, mas viajam junto
+      // pra renomear um setor não perder o cabeçalho especial dele.
+      rotuloData: m.rotuloData,
+      dataInicioEntrega: m.dataInicioEntrega,
+      endEntregaNoCabecalho: m.endEntregaNoCabecalho,
+      enderecoObs: m.enderecoObs,
       caixasSoltas: (m.caixasSoltas || []).slice(),
       tabelas: (m.tabelas || []).map(t => ({
         titulo: t.titulo || '', semCheck: !!t.semCheck,
@@ -3797,6 +3822,11 @@ function salvarFichas(alvo) {
       cor: s.cor,
       atencao: !!s.atencao,
       rodape: s.rodape || '',
+      // Preserva o layout do cabeçalho (ver fichasParaEditar).
+      rotuloData: s.rotuloData,
+      dataInicioEntrega: s.dataInicioEntrega,
+      endEntregaNoCabecalho: s.endEntregaNoCabecalho,
+      enderecoObs: s.enderecoObs,
       caixasSoltas: (s.caixasSoltas || []).filter(Boolean),
       tabelas: (s.tabelas || []).map(t => {
         // Mantém linhas em branco INTERNAS (viram campo pra escrever na prancha),
@@ -3817,6 +3847,13 @@ function salvarFichas(alvo) {
 
   const cfg = STORE.getCFG();
   cfg.fichasSetores = mapa;
+
+  // Setores de FÁBRICA que o admin apagou. Precisam ficar registrados: o padrão
+  // sempre semeia o mapa, então sem esta lista o setor voltava sozinho.
+  // Recriar um setor com o mesmo nome tira ele da lista.
+  const deFabrica = (typeof PRANCHA !== 'undefined' && PRANCHA.setoresPadrao) ? PRANCHA.setoresPadrao : [];
+  const vivos = nomes.map(n => norm(n));
+  cfg.fichasApagadas = deFabrica.filter(n => !vivos.includes(norm(n)));
 
   // A lista de setores do gerador NÃO é reconstruída do zero: se fosse, todo
   // "Salvar fichas" ressuscitava os setores que o admin tinha tirado na aba

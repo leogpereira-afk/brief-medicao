@@ -170,6 +170,14 @@ const PRANCHA = (() => {
     const cor = ov.cor ? (hexParaRgb(ov.cor) || base.cor) : base.cor;
     return {
       ...base,
+      // Flags de layout do cabeçalho (Data Export, Data Início/ENTREGA, End+
+      // Entrega, linha de endereço/obs). O editor não mostra, mas o round-trip
+      // carrega: sem isto, RENOMEAR um setor de fábrica perdia o cabeçalho
+      // especial dele (o override não casava mais nenhum modelo e caía no padrão).
+      rotuloData: ov.rotuloData !== undefined ? ov.rotuloData : base.rotuloData,
+      dataInicioEntrega: ov.dataInicioEntrega !== undefined ? ov.dataInicioEntrega : base.dataInicioEntrega,
+      endEntregaNoCabecalho: ov.endEntregaNoCabecalho !== undefined ? ov.endEntregaNoCabecalho : base.endEntregaNoCabecalho,
+      enderecoObs: ov.enderecoObs !== undefined ? ov.enderecoObs : base.enderecoObs,
       cor,
       corTexto: ov.cor ? corTextoDe(cor) : base.corTexto,
       atencao: ov.atencao != null ? !!ov.atencao : base.atencao,
@@ -183,16 +191,24 @@ const PRANCHA = (() => {
               colunas: (t.colunas || []).filter(Boolean),
               semCheck: !!t.semCheck
             };
-            if (t.cores) nt.cores = t.cores; // cores de linha (Serralheria)
+            // Cores de linha (Serralheria) são um array casado por POSIÇÃO com
+            // os itens. Se o admin mexeu nos itens e a contagem não bate mais,
+            // a cor iria pra linha errada -- melhor não pintar do que pintar
+            // "Alumínio" com a cor do "Metalom".
+            if (t.cores && t.cores.length === nt.itens.length) nt.cores = t.cores;
             return nt;
           })
         : base.tabelas
     };
   }
-  // Mapa efetivo: padrão + overrides do admin (inclusive setores novos).
+  // Mapa efetivo: padrão + overrides do admin (inclusive setores novos), menos
+  // os que o admin apagou. Sem essa lista de apagados, um setor de fábrica
+  // removido no editor voltava sozinho no próximo carregamento (o padrão sempre
+  // semeava o mapa) -- e ainda carimbava a ficha completa de fábrica.
   function todosModelos(cfg) {
     const out = {};
-    Object.keys(MODELOS).forEach(k => { out[k] = MODELOS[k]; });
+    const apagados = (cfg && Array.isArray(cfg.fichasApagadas)) ? cfg.fichasApagadas.map(norm) : [];
+    Object.keys(MODELOS).forEach(k => { if (!apagados.includes(norm(k))) out[k] = MODELOS[k]; });
     const custom = cfg && cfg.fichasSetores;
     if (custom && typeof custom === 'object') {
       Object.keys(custom).forEach(k => {
@@ -479,12 +495,16 @@ const PRANCHA = (() => {
     const d = dados || {};
     const marcas = d.marcas || {}, rotulos = d.rotulos || {}, valores = d.valores || {};
     const temValor = i => valores[i] && Object.values(valores[i]).some(v => String(v || '').trim());
+    // Tabela "só preencher" SEM colunas e com rótulos fixos não tem por onde ser
+    // preenchida (nem caixa, nem campo). Se a filtrássemos no resumo, a lista
+    // simplesmente sumiria da prancha -- então essas linhas sempre entram.
+    const semOndePreencher = tab.semCheck && !(tab.colunas || []).length;
     const rows = [];
     (tab.itens || []).forEach((item, i) => {
       const livre = !item || /:$/.test(item);
       const escrito = String(rotulos[i] || '').trim();
       const incluir = !compacto || (tab.semCheck
-        ? (escrito || temValor(i))
+        ? (escrito || temValor(i) || (semOndePreencher && !livre))
         : (marcas[i] || (livre && escrito) || temValor(i)));
       if (!incluir) return;
       const texto = escrito ? (item && /:$/.test(item) ? item + ' ' + escrito : escrito) : item;
@@ -619,19 +639,34 @@ const PRANCHA = (() => {
     }
   }
 
-  // A ficha desta prancha tem QUALQUER coisa marcada/escrita? (decide resumo × branco)
+  // Mesma chave usada no app: título normalizado (não a posição). Assim mexer
+  // nas fichas no admin não faz a marcação de uma prancha antiga reaparecer na
+  // tabela errada ao regerar.
+  function chaveTabela(modelo, ti) {
+    const tab = modelo && (modelo.tabelas || [])[ti];
+    const t = tab && String(tab.titulo || '').trim();
+    return t ? 't:' + norm(t) : String(ti);
+  }
+  function dadosDaTabela(ficha, modelo, ti) {
+    const tabs = (ficha && ficha.tabelas) || {};
+    return tabs[chaveTabela(modelo, ti)] || tabs[ti] || null; // [ti] = pranchas antigas
+  }
+
+  // A ficha desta prancha tem algo marcado NAS TABELAS QUE O SETOR AINDA TEM?
+  // Considerar marcação órfã (de tabela que foi apagada no admin) fazia a
+  // prancha entrar em modo resumo e sair com o corpo vazio.
   function fichaTemAlgo(ficha, modelo) {
     if (!ficha) return false;
     if (ficha.soltas && Object.values(ficha.soltas).some(Boolean)) return true;
-    const tabs = ficha.tabelas || {};
-    return Object.keys(tabs).some(ti => {
-      const t = tabs[ti] || {};
+    const temConteudo = (t) => {
+      if (!t) return false;
       if (String(t.outros || '').trim()) return true;
       if (t.marcas && Object.values(t.marcas).some(Boolean)) return true;
       if (t.rotulos && Object.values(t.rotulos).some(v => String(v || '').trim())) return true;
       if (t.valores && Object.values(t.valores).some(col => Object.values(col || {}).some(v => String(v || '').trim()))) return true;
       return false;
-    });
+    };
+    return ((modelo && modelo.tabelas) || []).some((_, ti) => temConteudo(dadosDaTabela(ficha, modelo, ti)));
   }
 
   // ── Uma prancha ───────────────────────────────────────────────────────────
@@ -683,7 +718,7 @@ const PRANCHA = (() => {
     const tabelas = modelo.tabelas || [];
     for (let ti = 0; ti < tabelas.length; ti++) {
       const tab = tabelas[ti];
-      const dados = (ficha.tabelas || {})[ti];
+      const dados = dadosDaTabela(ficha, modelo, ti);
       // Quantas linhas essa tabela vai desenhar (pra decidir a quebra de coluna).
       const nLinhas = linhasDaTabela(tab, dados, compacto).length;
       if (compacto && !nLinhas) continue; // tabela sem nada marcado some no resumo
