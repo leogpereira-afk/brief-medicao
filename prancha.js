@@ -744,38 +744,57 @@ const PRANCHA = (() => {
     const wArte = W - M - 8 - xArte;
     const hArte = yFimCorpo - yCorpo - 8;
 
+    // O título e as medidas RESERVAM espaço antes da imagem entrar. Antes eram
+    // desenhados por cima da arte (posição fixa), e o texto ficava ilegível em
+    // cima do desenho -- justamente o que a produção precisa ler.
+    const TIT_FS = 20, TIT_LH = TIT_FS + 4;
+    let titLinhas = [];
+    if (p.tituloServico) {
+      doc.setFont('Poppins', 'bold'); doc.setFontSize(TIT_FS);
+      titLinhas = doc.splitTextToSize(String(p.tituloServico).toUpperCase(), wArte).slice(0, 2);
+    }
+    const altTitulo = titLinhas.length ? titLinhas.length * TIT_LH + 6 : 0;
+
+    // Medidas: encolhe até TODAS as linhas caberem (medida cortada faz a
+    // produção cortar material a menos).
+    let medLinhas = [], medFs = 9;
+    if (p.medidas) {
+      doc.setFont('Poppins', 'normal');
+      const alturaDisp = 96;
+      doc.setFontSize(medFs);
+      medLinhas = doc.splitTextToSize(String(p.medidas), wArte);
+      while (medLinhas.length * (medFs + 2.4) > alturaDisp && medFs > 5) {
+        medFs -= 0.4; doc.setFontSize(medFs);
+        medLinhas = doc.splitTextToSize(String(p.medidas), wArte);
+      }
+    }
+    const altMedidas = medLinhas.length ? medLinhas.length * (medFs + 2.4) + 8 : 0;
+
+    // Título no topo da coluna da arte
+    if (titLinhas.length) {
+      doc.setFont('Poppins', 'bold'); doc.setFontSize(TIT_FS); doc.setTextColor(...PRETO);
+      titLinhas.forEach((l, i) => doc.text(l, xArte, yCorpo + TIT_FS + i * TIT_LH));
+    }
+
+    // A imagem fica no que sobrou ENTRE o título e as medidas.
+    const yImg = yCorpo + altTitulo;
+    const hImg = Math.max(40, hArte - altTitulo - altMedidas);
     if (p.imagem) {
       const dims = await medirImagem(p.imagem);
       const prop = dims ? dims.h / dims.w : 0.72;
       let w = wArte, h = w * prop;
-      if (h > hArte) { h = hArte; w = h / prop; }
-      const ix = xArte + (wArte - w) / 2, iy = yCorpo + (hArte - h) / 2;
+      if (h > hImg) { h = hImg; w = h / prop; }
+      const ix = xArte + (wArte - w) / 2, iy = yImg + (hImg - h) / 2;
       try { doc.addImage(p.imagem, 'JPEG', ix, iy, w, h, undefined, 'FAST'); } catch {}
       // Moldura fina: a arte fica com cara de peça, não de imagem solta na folha.
       doc.setDrawColor(...BORDA); doc.setLineWidth(0.8);
       doc.rect(ix, iy, w, h);
     }
 
-    // Título do serviço e medidas, quando informados (vão sobre a área da arte)
-    if (p.tituloServico) {
-      doc.setFont('Poppins', 'bold'); doc.setTextColor(...PRETO);
-      let fs = 20; doc.setFontSize(fs);
-      const linhas = doc.splitTextToSize(String(p.tituloServico).toUpperCase(), wArte);
-      doc.text(linhas.slice(0, 2), xArte, yCorpo + 22);
-    }
-    if (p.medidas) {
-      // Medida cortada faz a produção cortar material a menos: encolhe a fonte
-      // até TODAS as linhas caberem, em vez de descartar as que sobram.
-      doc.setFont('Poppins', 'normal'); doc.setTextColor(...CINZA_TXT);
-      const alturaDisp = 96;
-      let fs = 9;
-      doc.setFontSize(fs);
-      let linhas = doc.splitTextToSize(String(p.medidas), wArte);
-      while (linhas.length * (fs + 2.4) > alturaDisp && fs > 5) {
-        fs -= 0.4; doc.setFontSize(fs);
-        linhas = doc.splitTextToSize(String(p.medidas), wArte);
-      }
-      doc.text(linhas, xArte, yFimCorpo - 8 - linhas.length * (fs + 2.4));
+    // Medidas embaixo, no espaço que já foi reservado pra elas
+    if (medLinhas.length) {
+      doc.setFont('Poppins', 'normal'); doc.setFontSize(medFs); doc.setTextColor(...CINZA_TXT);
+      doc.text(medLinhas, xArte, yFimCorpo - 8 - medLinhas.length * (medFs + 2.4) + medFs);
     }
 
     // Carimbos são opcionais: só saem quando o designer marca na prévia

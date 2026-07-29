@@ -83,13 +83,32 @@ const PDF = (() => {
     doc.setFillColor(...INDIGO_ESCURO);
     doc.rect(0, 86, W, 6, 'F');
     doc.setFont('Poppins', 'normal'); doc.setTextColor(255, 255, 255);
-    doc.setFontSize(21);
-    doc.text(titulo, M, 42);
+
+    // A data fica à direita; o título só pode usar o que sobra. Sem esse teto,
+    // um título longo (nome de produto inteiro) passava POR CIMA da data.
+    let larguraSub = 0;
+    if (sub) {
+      doc.setFontSize(10);
+      larguraSub = doc.getTextWidth(String(sub));
+    }
+    const dispTitulo = W - 2 * M - (larguraSub ? larguraSub + 16 : 0);
+
+    // Encolhe até caber; se nem no menor corpo couber, corta com reticências.
+    let fs = 21;
+    doc.setFontSize(fs);
+    let t = String(titulo || '');
+    while (doc.getTextWidth(t) > dispTitulo && fs > 12) { fs -= 0.5; doc.setFontSize(fs); }
+    if (doc.getTextWidth(t) > dispTitulo) {
+      while (t.length > 4 && doc.getTextWidth(t + '…') > dispTitulo) t = t.slice(0, -1);
+      t += '…';
+    }
+    doc.text(t, M, 42);
+
     doc.setFontSize(9.5);
     doc.text('Impresilk · Soluções Visuais', M, 60);
     if (sub) {
       doc.setFontSize(10);
-      doc.text(sub, W - M, 42, { align: 'right' });
+      doc.text(String(sub), W - M, 42, { align: 'right' });
     }
     c.y = 116;
   }

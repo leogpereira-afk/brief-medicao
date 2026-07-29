@@ -630,7 +630,7 @@ function abrirMenu() {
 function zerarEstadoDeTela() {
   FILTROS = filtrosZerados();
   PROD = prodVazio();
-  PROJ = { briefingId: '', busca: '', cliente: '', contato: '', osNumero: '', imagens: [] };
+  PROJ = projVazio();
   LOTE = null;
   BRIEF = null;
   ETAPA = 1;
@@ -896,7 +896,8 @@ function rascunhoProducao() {
   return !!(PROD._aberto && (String(PROD.osNumero || '').trim() || String(PROD.cliente || '').trim() || PROD.setores.length));
 }
 function rascunhoProjeto() {
-  return !!(PROJ._aberto && (PROJ.imagens.length || String(PROJ.cliente || '').trim()));
+  return !!(PROJ._aberto && (PROJ.imagens.length ||
+    String(PROJ.cliente || '').trim() || String(PROJ.osNumero || '').trim()));
 }
 
 function renderLayoutInicio(app) {
@@ -927,7 +928,7 @@ function renderLayoutInicio(app) {
   if (zerar) zerar.onclick = () => confirmar('Começar do zero?',
     'Vai apagar o que você já preencheu no gerador de layout.', 'Começar do zero', () => {
       PROD = prodVazio();
-      PROJ = { briefingId: '', busca: '', cliente: '', contato: '', osNumero: '', imagens: [] };
+      PROJ = projVazio();
       renderApp();
     }, true);
 }
@@ -1175,19 +1176,49 @@ async function gerarLoteProducao() {
 
 /* ── Modo Projeto ──────────────────────────────────────────────────────── */
 
-let PROJ = { briefingId: '', busca: '', cliente: '', contato: '', osNumero: '', imagens: [] };
+// Fábrica (não objeto solto): cada reset precisa de arrays próprios, senão as
+// artes de um cliente vazam pro lote do próximo -- mesma armadilha do PROD.
+function projVazio() {
+  return {
+    briefingId: '', busca: '', cliente: '', contato: '', osNumero: '',
+    os: null, erroOS: '', buscando: false,
+    vendedor: '', endereco: '', setor: 'Projeto', urgente: false,
+    imagens: []
+  };
+}
+let PROJ = projVazio();
+
+// Cabeçalho do modo Projeto: vem da O.S., do briefing ou da mão do designer.
+function baseProjeto() {
+  const b = PROJ.briefingId ? STORE.getOS(PROJ.briefingId) : null;
+  const os = PROJ.os;
+  return {
+    cliente: PROJ.cliente || (os && os.cliente) || (b && b.cliente) || '',
+    responsavel: PROJ.contato || (os && os.contato) || (b && b.responsavel) || '',
+    telefone: (os && os.telefone) || (b && b.telefone) || '',
+    vendedor: PROJ.vendedor || (os && os.vendedor) || (b && b.vendedor) || '',
+    endereco: PROJ.endereco || (os && os.endereco) || (b && b.endereco) || '',
+    osNumero: String(PROJ.osNumero || (b && b.osNumero) || '').trim(),
+    urgente: !!(PROJ.urgente || (b && b.urgente))
+  };
+}
 
 function renderLayoutProjeto(app) {
   document.title = 'Prancha de projeto';
-  // Entrar na tela vindo de fora zera o rascunho anterior: as artes do cliente
-  // passado NÃO podem entrar no lote do próximo (PDF sairia com a arte errada).
-  if (!PROJ._aberto) PROJ = { briefingId: '', busca: '', cliente: '', contato: '', osNumero: '', imagens: [], _aberto: true };
+  if (!PROJ._aberto) { PROJ = projVazio(); PROJ._aberto = true; }
+  const cfg = STORE.getCFG();
   const b = PROJ.briefingId ? STORE.getOS(PROJ.briefingId) : null;
+  const base = baseProjeto();
+  // Setores disponíveis pro selo da prancha (permite fazer um layout de
+  // Instalação — ou de qualquer setor — também aqui, não só na Produção).
+  const setores = cfg.setoresProducao || [];
   const candidatos = STORE.getAllOS()
     .filter(x => x && !x.apagadoEm && !x.avulsa && x.situacao === 'enviado')
     .filter(x => {
       const t = norm(PROJ.busca);
-      return !t || norm((x.cliente || '') + ' ' + (x.osNumero || '')).includes(t);
+      if (!t) return true;
+      return norm((x.cliente || '') + ' ' + (x.osNumero || '') + ' ' +
+        (x.numeroBrief ? padBrief(x.numeroBrief) : '')).includes(t);
     })
     .sort((a, z) => String(z.dataHora || '').localeCompare(String(a.dataHora || '')))
     .slice(0, 25);
@@ -1209,26 +1240,68 @@ function renderLayoutProjeto(app) {
       : '') +
     '</div>' +
 
-    '<div class="card"><div class="sub-secao">2 · Cliente</div>' +
-    '<p class="dica-campo" style="margin-bottom:10px">Vincular a um briefing preenche tudo sozinho. Sem briefing, informe o básico.</p>' +
-    '<div class="campo"><input id="pj-busca" type="text" placeholder="Buscar briefing por cliente ou O.S. (opcional)" value="' + esc(PROJ.busca) + '"></div>' +
-    (b
-      ? '<div class="aviso verde"><b>' + esc(b.cliente) + '</b>' +
-        (String(b.osNumero || '').trim() ? ' · O.S. ' + esc(b.osNumero) : ' · sem O.S.') +
-        ' <button class="botao mini fantasma" id="pj-trocar" style="margin-left:8px">Desvincular</button></div>'
-      : (PROJ.busca && candidatos.length
-          ? '<div class="lista-escolha">' + candidatos.map(x =>
-              '<button class="opcao-briefing" data-pjbrief="' + x.id + '"><b>' + esc(x.cliente || 'Sem nome') + '</b>' +
-              '<span class="dica-campo">' + (String(x.osNumero || '').trim() ? 'O.S. ' + esc(x.osNumero) : 'sem O.S.') + ' · ' + fmtData(x.dataHora) + '</span></button>').join('') + '</div>'
-          : '<div class="linha-3">' +
-            '<div class="campo"><label>Cliente</label><input id="pj-cliente" type="text" value="' + esc(PROJ.cliente) + '"></div>' +
-            '<div class="campo"><label>Contato</label><input id="pj-contato" type="text" value="' + esc(PROJ.contato) + '"></div>' +
-            '<div class="campo"><label>O.S. (se tiver)</label><input id="pj-os" type="text" inputmode="numeric" value="' + esc(PROJ.osNumero) + '"></div>' +
-            '</div>')) +
+    // Mesmas DUAS fontes da Produção: a O.S. preenche o cabeçalho sozinha (antes
+    // este modo só buscava briefing e o resto era digitado à mão).
+    '<div class="card"><div class="sub-secao">2 · De onde vêm os dados</div>' +
+    '<p class="dica-campo" style="margin-bottom:12px">Os dois caminhos valem e dá pra usar os dois juntos: a O.S. preenche o cabeçalho, o briefing traz as medidas da visita.</p>' +
+    '<div class="duas-buscas">' +
+
+    '<div class="busca-fonte">' +
+    '<div class="titulo-fonte"><span>📄</span><span>Pela O.S.</span></div>' +
+    '<div style="display:flex; gap:8px">' +
+    '<input id="pj-os-num" type="text" inputmode="numeric" placeholder="Nº da O.S. — ex: 22416" value="' + esc(PROJ.osNumero) + '" style="flex:1">' +
+    '<button class="botao mini" id="pj-buscar"' + (PROJ.buscando ? ' disabled' : '') + '>' +
+    (PROJ.buscando ? 'Buscando…' : 'Buscar') + '</button></div>' +
+    (PROJ.erroOS ? '<div class="aviso amarelo" style="margin-top:8px">' + esc(PROJ.erroOS) + '</div>' : '') +
+    (PROJ.os
+      ? '<div class="aviso verde" style="margin-top:8px"><b>' + esc(PROJ.os.cliente || 'Sem nome') + '</b>' +
+        (PROJ.os.servico ? ' · ' + esc(PROJ.os.servico) : '') +
+        ' <button class="botao mini fantasma" id="pj-limpar-os" style="margin-left:8px">Trocar</button></div>'
+      : '') +
     '</div>' +
+
+    '<div class="busca-fonte">' +
+    '<div class="titulo-fonte"><span>📋</span><span>Por um briefing</span></div>' +
+    '<input id="pj-busca" type="text" placeholder="Cliente, O.S. ou Nº do brief" value="' + esc(PROJ.busca) + '">' +
+    (b
+      ? '<div class="aviso verde" style="margin-top:8px"><b>' + esc(b.cliente) + '</b>' +
+        (b.numeroBrief ? ' · Nº ' + padBrief(b.numeroBrief) : '') +
+        (b.urgente ? ' · <b style="color:var(--perigo)">🔴 URGENTE</b>' : '') +
+        ' <button class="botao mini fantasma" id="pj-trocar" style="margin-left:8px">Desvincular</button></div>'
+      : (candidatos.length
+        ? '<div class="lista-escolha rolagem-curta">' + candidatos.map(x =>
+            '<button class="opcao-briefing" data-pjbrief="' + x.id + '"><b>' + esc(x.cliente || 'Sem nome') + '</b>' +
+            '<span class="dica-campo">' + (x.numeroBrief ? 'Nº ' + padBrief(x.numeroBrief) + ' · ' : '') +
+            (String(x.osNumero || '').trim() ? 'O.S. ' + esc(x.osNumero) : 'sem O.S.') + ' · ' + fmtData(x.dataHora) + '</span></button>').join('') + '</div>'
+        : '<div class="vazio">Nenhum briefing enviado encontrado.</div>')) +
+    '</div>' +
+
+    '</div>' +
+
+    '<div class="sub-secao" style="margin-top:16px">Cabeçalho da prancha</div>' +
+    '<div class="linha-2">' +
+    '<div class="campo"><label>Cliente</label><input id="pj-cliente" type="text" value="' + esc(base.cliente) + '"></div>' +
+    '<div class="campo"><label>Contato</label><input id="pj-contato" type="text" value="' + esc(base.responsavel) + '"></div>' +
+    '</div><div class="linha-2">' +
+    '<div class="campo"><label>Vendedor</label><input id="pj-vendedor" type="text" value="' + esc(base.vendedor) + '"></div>' +
+    '<div class="campo"><label>Endereço</label><input id="pj-endereco" type="text" value="' + esc(base.endereco) + '"></div>' +
+    '</div>' +
+    '<div class="campo" style="margin-top:6px"><label>Prioridade</label>' +
+    '<button class="chip chip-urgente ' + (base.urgente ? 'marcado' : '') + '" id="pj-urgente">🔴 URGENTE (carimbo em todas)</button></div>' +
+    '</div>' +
+
+    // Escolha do selo: dá pra fazer um layout de Instalação (ou de qualquer
+    // setor) neste modo, com a ficha daquele setor na prancha.
+    '<div class="card"><div class="sub-secao">3 · Tipo da prancha</div>' +
+    '<p class="dica-campo" style="margin-bottom:10px">"Projeto" é o layout aprovado. Escolhendo um setor, a prancha sai com o selo e a ficha dele (ex.: Instalação).</p>' +
+    '<div class="chips">' +
+    '<button class="chip ' + (PROJ.setor === 'Projeto' ? 'marcado' : '') + '" data-pjsetor="Projeto">🖼 Projeto</button>' +
+    setores.map(s => '<button class="chip ' + (PROJ.setor === s ? 'marcado' : '') + '" data-pjsetor="' + esc(s) + '">' + esc(s) + '</button>').join('') +
+    '</div></div>' +
 
     '<button class="botao largo" id="pj-gerar"' + (PROJ.imagens.length ? '' : ' disabled') + '>' +
     '⚙️ Montar ' + (PROJ.imagens.length || '') + ' prancha' + (PROJ.imagens.length === 1 ? '' : 's') + '</button>' +
+    (!PROJ.imagens.length ? '<p class="dica-campo" style="text-align:center; margin-top:8px">Escolha pelo menos uma imagem.</p>' : '') +
     '</main>';
 
   ligarTopo();
@@ -1249,14 +1322,68 @@ function renderLayoutProjeto(app) {
     PROJ.imagens.splice(Number(bt.dataset.remImg), 1);
     renderApp();
   });
+
+  // Busca de O.S. (igual à da Produção)
+  const bt = $('#pj-buscar');
+  if (bt) bt.onclick = () => buscarOSProjeto();
+  const osInp = $('#pj-os-num');
+  if (osInp) {
+    osInp.oninput = () => { PROJ.osNumero = osInp.value; };
+    osInp.onkeydown = e => { if (e.key === 'Enter') { e.preventDefault(); buscarOSProjeto(); } };
+  }
+  const lim = $('#pj-limpar-os');
+  if (lim) lim.onclick = () => {
+    Object.assign(PROJ, { os: null, osNumero: '', erroOS: '', cliente: '', contato: '', vendedor: '', endereco: '' });
+    renderApp();
+  };
+
   $('#pj-busca').oninput = debounce(e => { PROJ.busca = e.target.value; renderApp(); }, 300);
-  $$('[data-pjbrief]').forEach(bt => bt.onclick = () => { PROJ.briefingId = bt.dataset.pjbrief; renderApp(); });
+  $$('[data-pjbrief]').forEach(x => x.onclick = () => {
+    PROJ.briefingId = x.dataset.pjbrief;
+    const bb = STORE.getOS(x.dataset.pjbrief);
+    if (bb && bb.urgente) PROJ.urgente = true;
+    renderApp();
+  });
   const tr = $('#pj-trocar'); if (tr) tr.onclick = () => { PROJ.briefingId = ''; renderApp(); };
-  ['cliente', 'contato', 'osNumero'].forEach(campo => {
-    const el = $('#pj-' + (campo === 'osNumero' ? 'os' : campo));
+
+  // Cabeçalho editável — grava sem redesenhar (não rouba o foco).
+  [['pj-cliente', 'cliente'], ['pj-contato', 'contato'],
+   ['pj-vendedor', 'vendedor'], ['pj-endereco', 'endereco']].forEach(([id, campo]) => {
+    const el = $('#' + id);
     if (el) el.oninput = () => { PROJ[campo] = el.value; };
   });
+  const urg = $('#pj-urgente');
+  if (urg) urg.onclick = () => { PROJ.urgente = !PROJ.urgente; urg.classList.toggle('marcado', PROJ.urgente); };
+  $$('[data-pjsetor]').forEach(ch => ch.onclick = () => { PROJ.setor = ch.dataset.pjsetor; renderApp(); });
   $('#pj-gerar').onclick = () => gerarLoteProjeto(b);
+}
+
+async function buscarOSProjeto() {
+  const numero = String(PROJ.osNumero || '').trim();
+  if (!numero) { PROJ.erroOS = 'Digite o número da O.S. — ou preencha o cabeçalho à mão logo abaixo.'; renderApp(); return; }
+  PROJ.buscando = true; PROJ.erroOS = ''; renderApp();
+  try {
+    const res = await STORE.apiFn('mubisys', { action: 'buscarOS', numero });
+    if (res && res.encontrado && res.os) {
+      PROJ.os = res.os;
+      // Só preenche o que ainda não foi digitado à mão.
+      if (!PROJ.cliente) PROJ.cliente = res.os.cliente || '';
+      if (!PROJ.contato) PROJ.contato = res.os.contato || '';
+      if (!PROJ.vendedor) PROJ.vendedor = res.os.vendedor || '';
+      if (!PROJ.endereco) PROJ.endereco = res.os.endereco || '';
+      toast('O.S. ' + numero + ' encontrada ✓', 'sucesso');
+    } else {
+      PROJ.os = null;
+      PROJ.erroOS = 'O.S. não encontrada' +
+        (res && res.fontes && !res.fontes.mubisys && !res.fontes.pcp ? ' (integração ainda não configurada)' : '') +
+        '. Preencha o cabeçalho à mão — a prancha sai igual.';
+    }
+  } catch {
+    PROJ.erroOS = 'Sem conexão agora. Preencha o cabeçalho à mão — a prancha sai igual.';
+  } finally {
+    PROJ.buscando = false;
+    renderApp();
+  }
 }
 
 function p2n(n) { return String(n).padStart(2, '0'); }
@@ -1264,13 +1391,21 @@ function p2n(n) { return String(n).padStart(2, '0'); }
 async function gerarLoteProjeto(b) {
   if (!PROJ.imagens.length) return;
   const cfg = STORE.getCFG();
-  const base = b || { cliente: PROJ.cliente, responsavel: PROJ.contato, osNumero: PROJ.osNumero };
+  const base = baseProjeto();          // O.S. + briefing + o que foi digitado
+  const setor = PROJ.setor || 'Projeto';
+  const ehProjeto = setor === 'Projeto';
+  // Medidas: do briefing quando há; senão das linhas da O.S.
+  const medidas = b ? medidasDoBriefing(b) : medidasDaOS(PROJ.os);
   const total = PROJ.imagens.length;
   const itens = PROJ.imagens.map((im, i) => montarPrancha(base, {
-    seloServico: 'Projeto',
-    tituloServico: '',
+    seloServico: setor,
+    // Setor de verdade (ex.: Instalação) leva a ficha e o cabeçalho dele;
+    // "Projeto" continua sem setor, como era.
+    setor: ehProjeto ? '' : setor,
+    tituloServico: ehProjeto ? '' : setor.toUpperCase(),
     imagem: im.base64,
-    medidas: b ? medidasDoBriefing(b) : '',
+    medidas,
+    urgente: !!base.urgente,
     numero: i + 1, total
   }));
   LOTE = { modo: 'projeto', briefingId: b ? b.id : '', itens, cfg };
