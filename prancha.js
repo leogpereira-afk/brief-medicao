@@ -519,26 +519,40 @@ const PRANCHA = (() => {
     return rows;
   }
 
-  function tabelaCheck(doc, tab, x, y, dados, compacto) {
+  // Altura que uma tabela vai ocupar (pra decidir a compressão antes de desenhar).
+  function alturaDaTabela(tab, dados, compacto, escala) {
+    const n = linhasDaTabela(tab, dados, compacto).length;
+    if (compacto && !n) return 0;
+    return 15 * (escala || 1) + n * 13.5 * (escala || 1);
+  }
+
+  function tabelaCheck(doc, tab, x, y, dados, compacto, escala) {
     const d = dados || {};
     const valores = d.valores || {};
     const rows = linhasDaTabela(tab, dados, compacto);
     if (compacto && !rows.length) return null; // tabela sem nada marcado some no resumo
+    const k = escala || 1;
     const wCheck = tab.semCheck ? 0 : 15;
     const wRotulo = 128;
     const wCol = 62;
     const cols = tab.colunas || [];
     const largura = wCheck + wRotulo + cols.length * wCol;
-    const hLinha = 13.5, hTitulo = 15;
+    // Comprime a altura quando a ficha em branco de um setor grande não caberia
+    // na coluna única -- melhor apertar um pouco do que quebrar em duas colunas.
+    const hLinha = 13.5 * k, hTitulo = 15 * k;
+
+    // As fontes acompanham a compressão (com piso, pra não virar letra de formiga)
+    const fsTitulo = Math.max(6, 7.6 * k), fsItem = Math.max(5.4, 7.4 * k), fsCol = Math.max(5.2, 7.2 * k);
+    const baseTxt = hLinha * 0.68;   // linha de base do texto dentro da linha
 
     // Título
     caixa(doc, x, y, largura, hTitulo);
-    doc.setFont('Poppins', 'normal'); doc.setFontSize(7.6); doc.setTextColor(...PRETO);
-    doc.text(tab.titulo, x + wCheck + wRotulo / 2, y + 10.5, { align: 'center' });
+    doc.setFont('Poppins', 'normal'); doc.setFontSize(fsTitulo); doc.setTextColor(...PRETO);
+    doc.text(tab.titulo, x + wCheck + wRotulo / 2, y + hTitulo * 0.7, { align: 'center' });
     cols.forEach((c, i) => {
       const cx = x + wCheck + wRotulo + i * wCol;
       caixa(doc, cx, y, wCol, hTitulo);
-      if (c) { doc.setFontSize(6.6); doc.text(c, cx + wCol / 2, y + 10, { align: 'center' }); }
+      if (c) { doc.setFontSize(Math.max(5.2, 6.6 * k)); doc.text(c, cx + wCol / 2, y + hTitulo * 0.67, { align: 'center' }); }
     });
 
     let yy = y + hTitulo;
@@ -554,7 +568,7 @@ const PRANCHA = (() => {
       if (row.texto) {
         doc.setFont('Poppins', 'normal');
         doc.setTextColor(...(row.cor ? [255, 255, 255] : PRETO));
-        textoQueCabe(doc, row.texto, x + wCheck + wRotulo / 2, yy + 9.2, wRotulo - 8, 7.4, 5);
+        textoQueCabe(doc, row.texto, x + wCheck + wRotulo / 2, yy + baseTxt, wRotulo - 8, fsItem, 5);
       }
       cols.forEach((c, j) => {
         const cx = x + wCheck + wRotulo + j * wCol;
@@ -562,7 +576,7 @@ const PRANCHA = (() => {
         const v = row.i !== 'outros' && valores[row.i] && valores[row.i][j];
         if (v) {
           doc.setFont('Poppins', 'normal'); doc.setTextColor(...PRETO);
-          textoQueCabe(doc, String(v), cx + wCol / 2, yy + 9.2, wCol - 6, 7.2, 5);
+          textoQueCabe(doc, String(v), cx + wCol / 2, yy + baseTxt, wCol - 6, fsCol, 5);
         }
       });
       yy += hLinha;
@@ -697,79 +711,59 @@ const PRANCHA = (() => {
     const yCorpo = y + 6;
     const yFimCorpo = H - 34;
 
-    // Checklists do setor, na lateral esquerda. Quando não cabem numa coluna,
-    // seguem numa SEGUNDA coluna ao lado.
-    //
-    // Antes havia um `break` aqui: a tabela que não coubesse simplesmente não
-    // era desenhada. Impressão vinil tem 6 tabelas e só 4 saíam -- ORIGEM
-    // MEDIDAS e "Exportado com:" sumiam da folha, levando junto o que o
-    // designer tinha marcado nelas. Perder marcação em silêncio é pior do que
-    // uma prancha apertada.
     // Modo COMPACTO: se o designer marcou qualquer coisa na ficha, a prancha
     // sai como RESUMO (só o marcado). Sem nada marcado, sai a ficha em branco
-    // inteira pra preencher à mão. O resumo é o que sobra espaço pra arte.
+    // inteira pra preencher à mão.
     const compacto = fichaTemAlgo(ficha, modelo);
 
+    // As informações ficam SEMPRE numa coluna única à esquerda -- nunca quebram
+    // em duas. Como o resumo mostra só o que foi preenchido, cabe; e o que a
+    // coluna não usa vira espaço pra imagem, que é o que a produção precisa ver.
     const X0 = M + 4;
-    const LIMITE_TABELAS = W * 0.58;   // depois disto não sobra corpo pro desenho
-    let colX = X0;
-    let yTab = yCorpo + 4;
-    let larguraCol = 0;         // largura da coluna que está sendo preenchida
-    let larguraTabelas = 0;     // quanto o bloco todo ocupa (pra afastar a arte)
-    let yTabFundo = yCorpo + 4; // onde a tabela mais baixa termina
+    const tabelas = modelo.tabelas || [];
+    const soltasVisiveis = (modelo.caixasSoltas || [])
+      .map((rot, i) => ({ rot, i, marcada: !!(ficha.soltas && ficha.soltas[i]) }))
+      .filter(s => !compacto || s.marcada);
 
-    (modelo.caixasSoltas || []).forEach((rot, i) => {
-      const marcada = !!(ficha.soltas && ficha.soltas[i]);
-      if (compacto && !marcada) return; // no resumo só entra a caixa marcada
-      caixa(doc, colX, yTab, 16, 16);
-      if (marcada) visto(doc, colX, yTab, 16);
+    // Mede tudo ANTES de desenhar: se a ficha em branco de um setor grande não
+    // couber na coluna, comprime a altura em vez de quebrar em duas colunas.
+    const alturaCorpo = yFimCorpo - yCorpo;
+    const dadosPorTabela = tabelas.map((_, ti) => dadosDaTabela(ficha, modelo, ti));
+    const alturaSoltas = soltasVisiveis.length * 24;
+    let alturaBruta = alturaSoltas;
+    tabelas.forEach((tab, ti) => {
+      const h = alturaDaTabela(tab, dadosPorTabela[ti], compacto, 1);
+      if (h) alturaBruta += h + 12;
+    });
+    const disponivel = alturaCorpo - 8;
+    // Piso de 0,62: abaixo disso a letra ficaria pequena demais pro chão de fábrica.
+    const escala = alturaBruta > disponivel ? Math.max(0.62, disponivel / alturaBruta) : 1;
+
+    let yTab = yCorpo + 4;
+    let larguraTabelas = 0;
+
+    soltasVisiveis.forEach(({ rot, marcada }) => {
+      caixa(doc, X0, yTab, 16, 16);
+      if (marcada) visto(doc, X0, yTab, 16);
       doc.setFont('Poppins', 'normal'); doc.setFontSize(8.4); doc.setTextColor(...PRETO);
-      doc.text(rot, colX + 22, yTab + 11.5);
+      doc.text(rot, X0 + 22, yTab + 11.5);
       yTab += 24;
-      larguraCol = Math.max(larguraCol, 120);
+      larguraTabelas = Math.max(larguraTabelas, 120);
     });
 
-    const tabelas = modelo.tabelas || [];
     for (let ti = 0; ti < tabelas.length; ti++) {
-      const tab = tabelas[ti];
-      const dados = dadosDaTabela(ficha, modelo, ti);
-      // Quantas linhas essa tabela vai desenhar (pra decidir a quebra de coluna).
-      const nLinhas = linhasDaTabela(tab, dados, compacto).length;
-      if (compacto && !nLinhas) continue; // tabela sem nada marcado some no resumo
-      const alturaPrevista = 15 + nLinhas * 13.5;
-      const comecouAColuna = yTab > yCorpo + 4;
-      if (comecouAColuna && yTab + alturaPrevista > yFimCorpo - 6) {
-        const proximoX = colX + larguraCol + 12;
-        if (proximoX < LIMITE_TABELAS) {
-          larguraTabelas = Math.max(larguraTabelas, proximoX - X0);
-          colX = proximoX; yTab = yCorpo + 4; larguraCol = 0;
-        }
-      }
-      const r = tabelaCheck(doc, tab, colX, yTab, dados, compacto);
-      if (!r) continue;
-      yTab += r.altura + 12;
-      larguraCol = Math.max(larguraCol, r.largura);
-      larguraTabelas = Math.max(larguraTabelas, colX - X0 + larguraCol);
-      yTabFundo = Math.max(yTabFundo, yTab);   // onde as tabelas terminam
+      const r = tabelaCheck(doc, tabelas[ti], X0, yTab, dadosPorTabela[ti], compacto, escala);
+      if (!r) continue;   // tabela sem nada marcado some no resumo
+      yTab += r.altura + 12 * escala;
+      larguraTabelas = Math.max(larguraTabelas, r.largura);
     }
 
-    // Onde a arte entra. Duas situações:
-    //  · tabelas ALTAS (Instalação, vinil): a arte fica ao lado, como sempre.
-    //  · tabelas CURTAS (Serralheria, ou qualquer resumo enxuto): a arte DESCE e
-    //    usa a largura inteira. Antes ela ficava espremida na coluna da direita
-    //    e metade da folha saía vazia -- justo no setor em que o desenho técnico
-    //    é o que mais importa.
-    const alturaCorpo = yFimCorpo - yCorpo;
-    // 0,6 = as tabelas usam menos de 60% da altura do corpo. Acima disso (ex.:
-    // Instalação, com 27 linhas) a arte continua ao lado, senão ficaria achatada.
-    const tabelasCurtas = larguraTabelas > 0 && (yTabFundo - yCorpo) < alturaCorpo * 0.6;
-    const xArte = tabelasCurtas ? M + 8 : M + 8 + (larguraTabelas ? larguraTabelas + 16 : 0);
+    // A arte fica ao lado da coluna e usa TODO o resto da folha.
+    const xArte = M + 8 + (larguraTabelas ? larguraTabelas + 16 : 0);
     const wArte = W - M - 8 - xArte;
-    // Com as tabelas curtas o título fica ao lado delas (aproveita o topo) e a
-    // arte começa abaixo de tudo.
-    const yTopoArte = tabelasCurtas ? yTabFundo + 6 : yCorpo;
-    const xTitulo = tabelasCurtas ? M + 8 + larguraTabelas + 16 : xArte;
-    const wTitulo = W - M - 8 - xTitulo;
+    const yTopoArte = yCorpo;
+    const xTitulo = xArte;
+    const wTitulo = wArte;
     const hArte = yFimCorpo - yTopoArte - 8;
 
     // O título e as medidas RESERVAM espaço antes da imagem entrar. Antes eram
@@ -783,7 +777,7 @@ const PRANCHA = (() => {
     }
     // Com as tabelas curtas o título fica ao LADO delas, então não rouba altura
     // da arte; com as tabelas altas ele fica em cima da arte e reserva espaço.
-    const altTitulo = (titLinhas.length && !tabelasCurtas) ? titLinhas.length * TIT_LH + 6 : 0;
+    const altTitulo = titLinhas.length ? titLinhas.length * TIT_LH + 6 : 0;
 
     // Medidas: encolhe até TODAS as linhas caberem (medida cortada faz a
     // produção cortar material a menos).
