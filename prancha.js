@@ -809,6 +809,7 @@ const PRANCHA = (() => {
     // A imagem fica no que sobrou ENTRE o título e as medidas.
     const yImg = yTopoArte + altTitulo;
     const hImg = Math.max(40, hArte - altTitulo - altMedidas);
+    let xMedidas = xArte;   // as medidas acompanham a arte, não a margem
     if (p.imagem) {
       const dims = await medirImagem(p.imagem);
       const prop = dims ? dims.h / dims.w : 0.72;
@@ -819,12 +820,26 @@ const PRANCHA = (() => {
       // Moldura fina: a arte fica com cara de peça, não de imagem solta na folha.
       doc.setDrawColor(...BORDA); doc.setLineWidth(0.8);
       doc.rect(ix, iy, w, h);
+      xMedidas = ix;
+    } else {
+      // SEM arte a prancha é pra desenhar à mão: demarca a área com um quadro
+      // pontilhado, em vez de deixar um vazio sem referência na folha.
+      const mx = xArte + 4, my = yImg + 4;
+      const mw = Math.max(60, wArte - 8), mh = Math.max(40, hImg - 8);
+      doc.setDrawColor(190, 190, 190); doc.setLineWidth(0.8);
+      doc.setLineDashPattern([4, 4], 0);
+      doc.rect(mx, my, mw, mh);
+      doc.setLineDashPattern([], 0);
+      doc.setFont('Poppins', 'normal'); doc.setFontSize(8); doc.setTextColor(170, 170, 170);
+      doc.text('espaço para o desenho', mx + mw / 2, my + mh / 2, { align: 'center' });
+      xMedidas = mx;
     }
 
-    // Medidas embaixo, no espaço que já foi reservado pra elas
+    // Medidas logo abaixo da arte, alinhadas com ela. Antes ficavam presas à
+    // margem esquerda e apareciam soltas num canto, longe do desenho.
     if (medLinhas.length) {
       doc.setFont('Poppins', 'normal'); doc.setFontSize(medFs); doc.setTextColor(...CINZA_TXT);
-      doc.text(medLinhas, xArte, yFimCorpo - 8 - medLinhas.length * (medFs + 2.4) + medFs);
+      doc.text(medLinhas, xMedidas, yFimCorpo - 8 - medLinhas.length * (medFs + 2.4) + medFs);
     }
 
     // Carimbos são opcionais: só saem quando o designer marca na prévia
