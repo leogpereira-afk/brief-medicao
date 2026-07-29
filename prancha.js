@@ -541,8 +541,12 @@ const PRANCHA = (() => {
     // na coluna única -- melhor apertar um pouco do que quebrar em duas colunas.
     const hLinha = 13.5 * k, hTitulo = 15 * k;
 
-    // As fontes acompanham a compressão (com piso, pra não virar letra de formiga)
-    const fsTitulo = Math.max(6, 7.6 * k), fsItem = Math.max(5.4, 7.4 * k), fsCol = Math.max(5.2, 7.2 * k);
+    // A LETRA só encolhe quando a linha fica genuinamente apertada -- não junto
+    // com a compressão. Uma fonte de 7,4pt cabe folgada numa linha de 11pt, e
+    // encolher as duas juntas deixava a ficha do vinil em 6,2pt sem precisar.
+    const fsTitulo = Math.max(6, Math.min(7.6, hTitulo * 0.55));
+    const fsItem = Math.max(5.4, Math.min(7.4, hLinha * 0.66));
+    const fsCol = Math.max(5.2, Math.min(7.2, hLinha * 0.64));
     const baseTxt = hLinha * 0.68;   // linha de base do texto dentro da linha
 
     // Título
@@ -730,10 +734,13 @@ const PRANCHA = (() => {
     const alturaCorpo = yFimCorpo - yCorpo;
     const dadosPorTabela = tabelas.map((_, ti) => dadosDaTabela(ficha, modelo, ti));
     const alturaSoltas = soltasVisiveis.length * 24;
+    // 8pt entre tabelas (era 12): compra folga na coluna sem apertar nenhuma
+    // linha -- o que sobra vai pro tamanho da letra e pra imagem.
+    const GAP_TAB = 8;
     let alturaBruta = alturaSoltas;
     tabelas.forEach((tab, ti) => {
       const h = alturaDaTabela(tab, dadosPorTabela[ti], compacto, 1);
-      if (h) alturaBruta += h + 12;
+      if (h) alturaBruta += h + GAP_TAB;
     });
     const disponivel = alturaCorpo - 8;
     // Piso de 0,62: abaixo disso a letra ficaria pequena demais pro chão de fábrica.
@@ -754,7 +761,7 @@ const PRANCHA = (() => {
     for (let ti = 0; ti < tabelas.length; ti++) {
       const r = tabelaCheck(doc, tabelas[ti], X0, yTab, dadosPorTabela[ti], compacto, escala);
       if (!r) continue;   // tabela sem nada marcado some no resumo
-      yTab += r.altura + 12 * escala;
+      yTab += r.altura + GAP_TAB * escala;
       larguraTabelas = Math.max(larguraTabelas, r.largura);
     }
 
