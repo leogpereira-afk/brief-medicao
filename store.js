@@ -421,14 +421,24 @@ const STORE = (() => {
     _syncing = false;
     const remaining = getQueue();
     _notifySync(remaining.length ? (navigator.onLine ? 'pending' : 'offline') : 'ok', remaining.length);
+    // Sobrou item na fila (entrou durante o envio, ou falhou por rede)? Re-agenda
+    // em vez de esperar o próximo gatilho -- podia demorar até 60s pra tentar.
+    if (remaining.length && navigator.onLine && !_reagendou) {
+      _reagendou = true;
+      setTimeout(() => { _reagendou = false; trySync(); }, 4000);
+    }
   }
+  let _reagendou = false;
 
   // ── pull: busca lista do servidor e mescla ────────────────────────────────
   async function pull(onRefresh) {
     if (!navigator.onLine) return;
     // Um pull de cada vez. Sem isto, boot + timer de 60s + botão manual podiam
     // rodar pulls sobrepostos, cada um baixando a lista e redesenhando a tela.
-    if (_pulling) return;
+    // Devolve {pulou:true} -- diferente de undefined (que significa ERRO), pra
+    // o botão "Sincronizar" não anunciar "servidor fora" quando só coincidiu
+    // com um pull de fundo já em andamento.
+    if (_pulling) return { pulou: true };
     _pulling = true;
     try {
       const local = getAllOS();
@@ -510,6 +520,23 @@ const STORE = (() => {
       }
 
       if (changed) {
+        // RE-MESCLA antes de gravar. O pull lê o cache no início e só grava no
+        // fim, com vários awaits no meio -- se o trySync gravou nesse intervalo
+        // (ex.: o numeroBrief que o servidor acabou de atribuir), escrever o
+        // snapshot antigo apagava aquilo PRA SEMPRE (o pull seguinte via os
+        // timestamps iguais e não recopiava).
+        const atual = getAllOS();
+        if (atual.length) {
+          const porId = new Map(local.map(o => [o.id, o]));
+          atual.forEach(o => {
+            const noPull = porId.get(o.id);
+            if (!noPull) return;
+            // Campos que o SERVIDOR atribui e o pull pode não ter visto ainda.
+            if (o.numeroBrief && !noPull.numeroBrief) noPull.numeroBrief = o.numeroBrief;
+            // Marca de falha de envio é estado local: não deixa o pull limpar.
+            if (o._syncFalhou && !noPull._syncFalhou) { noPull._syncFalhou = true; noPull._syncMotivo = o._syncMotivo; }
+          });
+        }
         _setAllOS(local);
         lsSet(K.LASTSYNC, new Date().toISOString());
         if (typeof onRefresh === 'function') onRefresh();

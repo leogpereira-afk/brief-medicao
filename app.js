@@ -353,6 +353,10 @@ STORE.onSync((status, pendentes) => {
       if (campo) campo.value = rotuloBrief(BRIEF);
     }
   }
+  // Os selos "⏳ subindo…" e "⚠ NÃO SUBIU" são um retrato do momento em que a
+  // lista foi desenhada. Sem redesenhar ao fim do sync, o cartão ficava
+  // "subindo…" pra sempre e o vendedor tocava de novo achando que falhou.
+  if (ROTA.nome === 'lista' && typeof _refreshCards === 'function' && !_sincronizando) _refreshCards();
 });
 
 // Resumo em linguagem simples do que difere entre as duas versões, pro usuário
@@ -566,11 +570,15 @@ async function sincronizarAgora() {
     // pull devolve undefined quando NÃO conseguiu falar com o servidor. Sem
     // olhar isso, uma fila vazia virava "Tudo sincronizado ✓" mesmo com o
     // servidor fora do ar -- a mentira mais cara que este botão podia contar.
-    const r = await STORE.pull(() => renderApp());
+    let r = await STORE.pull(() => renderApp());
+    // Coincidiu com um pull de fundo? Espera ele terminar e tenta de novo, em
+    // vez de acusar "servidor fora" com o servidor no ar.
+    if (r && r.pulou) { await new Promise(res => setTimeout(res, 900)); r = await STORE.pull(() => renderApp()); }
     await STORE.trySync();
     const pend = (STORE.getQueue() || []).length;
     if (!navigator.onLine) toast('Sem conexão agora. Sincroniza sozinho quando voltar o sinal.', 'erro');
     else if (!r) toast('Não consegui falar com o servidor agora. O que você fez está salvo neste aparelho.', 'erro');
+    else if (r.pulou && pend === 0) toast('Sincronização já estava rodando — está tudo em dia.', 'sucesso');
     else if (pend > 0) toast(pend + ' item(ns) ainda na fila. Continua tentando sozinho.', 'erro');
     else toast('Tudo sincronizado ✓', 'sucesso');
   } catch (e) {
@@ -615,6 +623,21 @@ function abrirMenu() {
   $('#menu-sair', sheet).onclick = () => { fechar(); sairDaConta(); };
 }
 
+// Zera o estado que é só de TELA (não é dado). Sem isto, o filtro do designer
+// ("Só os meus") ficava ligado pro vendedor que entrasse no mesmo aparelho --
+// e ele nem via o chip pra desligar. O rascunho do editor de fichas também
+// sobrevivia e voltava como se fosse o que está salvo.
+function zerarEstadoDeTela() {
+  FILTROS = filtrosZerados();
+  PROD = prodVazio();
+  PROJ = { briefingId: '', busca: '', cliente: '', contato: '', osNumero: '', imagens: [] };
+  LOTE = null;
+  BRIEF = null;
+  ETAPA = 1;
+  FICHAS_EDIT = null; _fichasSuja = false; _configSuja = false;
+  ITENS_RECOLHIDOS.clear(); OS_ITENS_DESMARCADOS.clear();
+}
+
 function sairDaConta() {
   const pendentes = (STORE.getQueue() || []).length;
   const m = abrirModal(
@@ -632,6 +655,7 @@ function sairDaConta() {
   $('.btn-sair', m).onclick = () => {
     m.remove();
     STORE.setUser(null); SESSAO = null;
+    zerarEstadoDeTela();
     location.hash = '#/login';
   };
   // Limpa de verdade: sem isto, "Sair" deixava briefings, fotos e o usuário
@@ -661,6 +685,9 @@ function renderApp() {
   const app = $('#app');
   flushSalvar(); // nunca redesenhar por cima de digitação ainda não gravada
   if (!SESSAO && ROTA.nome !== 'login' && ROTA.nome !== 'inicio') { location.hash = '#/'; return; }
+  // Saiu do painel de controle: o rascunho do editor de fichas não vale mais
+  // (ao voltar, a aba relê o que está salvo).
+  if (ROTA.nome !== 'admin') _fichasAbaViva = false;
   switch (ROTA.nome) {
     case 'inicio': return renderInicio(app);
     case 'layout': return renderLayout(app);
@@ -715,7 +742,7 @@ function renderInicio(app) {
   const sair = $('#ini-sair');
   if (sair) sair.onclick = e => {
     e.preventDefault();
-    STORE.setUser(null); SESSAO = null; renderApp();
+    STORE.setUser(null); SESSAO = null; zerarEstadoDeTela(); renderApp();
   };
 }
 
@@ -785,6 +812,7 @@ function renderLogin(app) {
     STORE.setUser({ usuario: u.usuario, nome: u.nome, papel: u.papel });
     STORE.setUsuarioLembrado(lembrar ? u.usuario : '');
     SESSAO = STORE.getUser();
+    zerarEstadoDeTela(); // entra limpo: nada do usuário anterior atravessa
     location.hash = def.destino;
   };
   $('#lg-entrar').onclick = entrar;
@@ -898,7 +926,7 @@ function renderLayoutInicio(app) {
   const zerar = $('#lay-zerar');
   if (zerar) zerar.onclick = () => confirmar('Começar do zero?',
     'Vai apagar o que você já preencheu no gerador de layout.', 'Começar do zero', () => {
-      PROD = Object.assign({}, PROD_VAZIO);
+      PROD = prodVazio();
       PROJ = { briefingId: '', busca: '', cliente: '', contato: '', osNumero: '', imagens: [] };
       renderApp();
     }, true);
@@ -910,12 +938,17 @@ function renderLayoutInicio(app) {
 // atalho opcional (traz foto e medidas já conferidas na visita): exigir um
 // briefing enviado travava o designer em todo trabalho que não passou por
 // visita -- que é a maioria.
-const PROD_VAZIO = {
-  osNumero: '', os: null, erroOS: '', buscando: false,
-  cliente: '', contato: '', vendedor: '', endereco: '',
-  briefingId: '', busca: '', setores: [], urgente: false
-};
-let PROD = Object.assign({}, PROD_VAZIO);
+// FUNÇÃO, não objeto: `Object.assign({}, PROD_VAZIO)` é cópia RASA, então o
+// array `setores` era o MESMO em todos os "resets" -- marcar Router num job
+// deixava Router marcado no próximo, e saía prancha de setor que ninguém pediu.
+function prodVazio() {
+  return {
+    osNumero: '', os: null, erroOS: '', buscando: false,
+    cliente: '', contato: '', vendedor: '', endereco: '',
+    briefingId: '', busca: '', setores: [], urgente: false
+  };
+}
+let PROD = prodVazio();
 
 // Dados do cabeçalho, venham da O.S., do briefing ou da mão do designer.
 function baseProducao() {
@@ -947,7 +980,7 @@ function temDadosProducao() {
 
 function renderLayoutProducao(app) {
   document.title = 'Pranchas de produção';
-  if (!PROD._aberto) PROD = Object.assign({}, PROD_VAZIO, { _aberto: true });
+  if (!PROD._aberto) PROD = Object.assign(prodVazio(), { _aberto: true });
   const cfg = STORE.getCFG();
   const setores = cfg.setoresProducao || [];
   const b = PROD.briefingId ? STORE.getOS(PROD.briefingId) : null;
@@ -1470,23 +1503,29 @@ function abrirPreviaLote() {
       if (el.dataset.pcampo === 'seloServico') {
         const card = $('.card-prancha[data-pi="' + i + '"]', m);
         const corpo = $('.ficha-corpo', card);
-        // Trocar o selo troca a ficha do setor. Se já havia marcação, confirma
-        // antes de apagar -- antes sumia sem avisar.
+        // Guarda o valor escolhido AGORA. `confirmar` é assíncrono: sem esta
+        // cópia, o `el.value = seloAnterior` logo abaixo revertia o campo antes
+        // do callback rodar, e a troca regravava o selo ANTIGO apagando a ficha.
+        const novoSelo = el.value;
         const jaMarcada = corpo && loteFichaMarcada(LOTE.itens[i]);
         const aplicar = () => {
-          LOTE.itens[i].seloServico = el.value;
-          const chip = $('.selo-mini', card); if (chip) chip.textContent = el.value || 'sem selo';
+          LOTE.itens[i].seloServico = novoSelo;
+          // `setor` também: o modelo e o carimbo usam `seloServico || setor`,
+          // então deixar o setor antigo fazia "Sem selo" não ter efeito nenhum.
+          LOTE.itens[i].setor = novoSelo;
+          el.value = novoSelo;
+          const chip = $('.selo-mini', card); if (chip) chip.textContent = novoSelo || 'sem selo';
           if (corpo) {
             LOTE.itens[i].ficha = { tabelas: {}, soltas: {} };
             corpo.innerHTML = htmlFichaSetor(LOTE.itens[i], i);
             ligarFicha(corpo, m);
           }
-          seloAnterior[i] = el.value;
+          seloAnterior[i] = novoSelo;
         };
         if (jaMarcada) {
           confirmar('Trocar o setor?', 'A ficha que você marcou nesta prancha vai ser apagada (cada setor tem a sua). Trocar mesmo assim?',
             'Trocar', aplicar, true);
-          el.value = seloAnterior[i]; // desfaz visualmente até confirmar
+          el.value = seloAnterior[i]; // volta ao anterior até a confirmação
         } else aplicar();
         return;
       }
@@ -1560,9 +1599,15 @@ function abrirPreviaLote() {
     outros.forEach(b => b.disabled = true);
     const txt = btn.textContent; btn.textContent = 'Gerando…';
     try {
+      const eraProjeto = LOTE && LOTE.modo === 'projeto';
       const ok = await exportarLote(separados);
-      if (ok !== false) m.remove(); // fechou só porque deu certo
-      else { outros.forEach(b => b.disabled = false); btn.textContent = txt; }
+      if (ok !== false) {
+        // Exportou: limpa as artes do modo Projeto. Sem isto, o designer que
+        // continuava na tela e vinculava OUTRO cliente exportava o PDF novo
+        // com as artes do cliente anterior.
+        if (eraProjeto) { PROJ.imagens = []; PROJ.briefingId = ''; PROJ.busca = ''; }
+        m.remove(); // fechou só porque deu certo
+      } else { outros.forEach(b => b.disabled = false); btn.textContent = txt; }
     } catch (e) {
       outros.forEach(b => b.disabled = false); btn.textContent = txt;
     }
@@ -2038,6 +2083,9 @@ function htmlCards(lista) {
       (b.numeroBrief ? '<span class="badge neutro">Nº ' + padBrief(b.numeroBrief) + '</span>' : '') +
       (naoSubiu ? '<span class="badge nao-subiu">⚠ NÃO SUBIU — toque</span>'
         : subindo ? '<span class="badge subindo">⏳ subindo…</span>'
+        // Devolvido pelo design: destaca, senão vira um "RASCUNHO" qualquer no
+        // meio da lista e o vendedor não sabe que tem correção esperando.
+        : (rascunho && b.devolucao) ? '<span class="badge devolvido">↩️ DEVOLVIDO — corrigir</span>'
         : rascunho ? '<span class="badge rascunho">RASCUNHO</span>' : badgeStatus(b.status)) +
       (b.tipoMedicao ? '<span class="badge ' + (b.tipoMedicao === 'Execução' ? 'tipo-execucao' : 'tipo-orcamento') + '">' + esc(b.tipoMedicao) + '</span>' : '') +
       (String(b.osNumero || '').trim() ? '<span class="badge neutro">O.S. ' + esc(b.osNumero) + '</span>' : '<span class="badge sem-os">SEM O.S.</span>') +
@@ -2059,6 +2107,7 @@ function ligarCards() {
         delete b._syncFalhou; delete b._syncMotivo;
         const ok = STORE.saveOS(b); // re-enfileira e tenta sincronizar
         toast(ok ? 'Tentando enviar de novo…' : 'Memória cheia — apague briefings antigos primeiro', ok ? 'sucesso' : 'erro');
+        if (typeof _refreshCards === 'function') _refreshCards(); // tira o selo na hora
         return;
       }
       const meu = b.vendedorUsuario === SESSAO.usuario;
@@ -2114,6 +2163,14 @@ function renderEditor(app) {
     '<div style="padding:12px 14px"><span id="salvo-info" class="salvo-info"></span></div>' +
     '</aside>' +
     '<div>' +
+    // O design devolveu pedindo correção: o vendedor precisa VER o motivo ao
+    // reabrir. Antes o recado só existia na tela do detalhe, que ele não abre.
+    (BRIEF.devolucao
+      ? '<div class="aviso vermelho" style="margin-bottom:12px">↩️ <b>Devolvido pra correção</b> por ' +
+        esc(BRIEF.devolucao.por) + ' em ' + fmtDataHora(BRIEF.devolucao.em) +
+        (BRIEF.devolucao.motivo ? ':<br>“' + esc(BRIEF.devolucao.motivo) + '”' : '') +
+        '<br><span class="dica-campo">Corrija e envie de novo na etapa 6.</span></div>'
+      : '') +
     '<div class="progresso"><div class="passos"><span>Etapa ' + ETAPA + ' de 6</span><span>' + esc(ETAPAS_DEF[ETAPA - 1].nome) + '</span></div>' +
     '<div class="trilho"><div class="barra" style="width:' + (ETAPA / 6 * 100) + '%"></div></div></div>' +
     htmlEtapa1() + htmlEtapa2(cfg) + htmlEtapa3() + htmlEtapa4(cfg) + htmlEtapa5() + htmlEtapa6() +
@@ -3389,7 +3446,7 @@ function renderDetalhe(app) {
     // `_aberto: true` é obrigatório: sem ele a tela de produção entende que
     // está sendo aberta do zero e zera o rascunho -- levando embora o briefing
     // que este botão acabou de escolher.
-    PROD = Object.assign({}, PROD_VAZIO, {
+    PROD = Object.assign(prodVazio(), {
       briefingId: b.id,
       osNumero: String(b.osNumero || '').trim(),
       urgente: !!b.urgente, // briefing urgente já liga a prioridade do lote
@@ -3579,6 +3636,10 @@ function renderAdmin(app) {
 // código: o admin cria/edita/apaga aqui, e vira cfg.fichasSetores (sincronizado).
 let FICHAS_EDIT = null;
 let _fichasSuja = false;
+// Fica true enquanto o admin continua NO PAINEL; sair dele derruba o rascunho.
+let _fichasAbaViva = false;
+// Nomes dos setores no momento em que a aba abriu (base pra salvar a diferença).
+let _fichasNomesAoAbrir = null;
 const RODAPES = [
   ['', 'Nenhum'],
   ['producao', 'Liberação produção'],
@@ -3614,8 +3675,19 @@ async function adminFichas(alvo) {
   // Os modelos vivem no prancha.js (carregado sob demanda). Sem ele, o editor
   // abriria vazio.
   try { await ensureModelos(); } catch { alvo.innerHTML = '<div class="aviso vermelho">Não consegui carregar os modelos das fichas.</div>'; return; }
-  // Recarrega do cfg quando abre limpo; mantém as edições enquanto estiver sujo.
-  if (!FICHAS_EDIT || !_fichasSuja) { FICHAS_EDIT = fichasParaEditar(STORE.getCFG()); _fichasSuja = false; }
+  // Só mantém o rascunho quando a pessoa NÃO saiu do painel. Se ela navegou pra
+  // fora (Briefings, Layout, logo…) e voltou, relê o cfg -- senão o rascunho
+  // abandonado voltava com cara de "salvo" e um Salvar apagava o que tinha
+  // chegado por sync de outro aparelho.
+  const continuou = _fichasSuja && _fichasAbaViva;
+  if (!FICHAS_EDIT || !continuou) {
+    FICHAS_EDIT = fichasParaEditar(STORE.getCFG());
+    _fichasSuja = false;
+    // Guarda quem existia ao abrir: é o que permite salvar só a DIFERENÇA
+    // (criados/apagados) sem desfazer a curadoria de setores em Configurações.
+    _fichasNomesAoAbrir = FICHAS_EDIT.map(s => String(s.nome || '').trim());
+  }
+  _fichasAbaViva = true;
   redesenharFichas(alvo);
 }
 
@@ -3745,11 +3817,23 @@ function salvarFichas(alvo) {
 
   const cfg = STORE.getCFG();
   cfg.fichasSetores = mapa;
-  // A lista de setores do gerador acompanha as fichas (é o que dá pra gerar).
-  cfg.setoresProducao = FICHAS_EDIT.map(s => s.nome.trim());
-  // O seletor de selo da prévia inclui os setores novos (mantém extras que já existiam).
-  const selos = new Set([...(cfg.tiposServico || []), ...cfg.setoresProducao]);
-  cfg.tiposServico = Array.from(selos);
+
+  // A lista de setores do gerador NÃO é reconstruída do zero: se fosse, todo
+  // "Salvar fichas" ressuscitava os setores que o admin tinha tirado na aba
+  // Configurações (o editor sempre lista todos os de fábrica). Aqui só
+  // aplicamos a DIFERENÇA: tira os apagados, acrescenta os criados.
+  const agora = nomes.slice();
+  const antes = _fichasNomesAoAbrir || agora;
+  const apagados = antes.filter(n => !agora.includes(n));
+  const criados = agora.filter(n => !antes.includes(n));
+  const atuais = (cfg.setoresProducao && cfg.setoresProducao.length ? cfg.setoresProducao : agora);
+  cfg.setoresProducao = atuais.filter(n => !apagados.includes(n)).concat(criados.filter(n => !atuais.includes(n)));
+
+  // Selos da prévia: acrescenta os novos e tira os de setores apagados,
+  // preservando os selos que não são setor (Retirada, Manutenção, Entrega…).
+  const selos = (cfg.tiposServico || []).filter(s => !apagados.includes(s));
+  criados.forEach(n => { if (!selos.includes(n)) selos.push(n); });
+  cfg.tiposServico = selos;
   STORE.saveCFG(cfg, SESSAO.nome);
   _fichasSuja = false;
   toast('Fichas salvas ✓ (sincronizam pra equipe)', 'sucesso');
