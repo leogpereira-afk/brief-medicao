@@ -429,13 +429,16 @@ async function boot() {
   // Config e lista buscam EM PARALELO (antes era em fila: esperava a config pra
   // só então buscar a lista -- dois round-trips somados, sentidos no cold start
   // da manhã). Cada um redesenha quando chega.
-  STORE.pullCFG().then(() => renderApp());
+  STORE.pullCFG().then(() => { conferirAcesso(); renderApp(); });
   STORE.pull(() => renderApp()).then(() => STORE.trySync());
 
   // Sincronização de fundo: só com o app À VISTA (não gasta bateria/dados em
   // segundo plano) e sempre reenviando a fila junto (item preso não fica parado).
   setInterval(() => {
     if (document.visibilityState && document.visibilityState !== 'visible') return;
+    // A config vem junto: é o que revoga o acesso de quem foi desligado sem
+    // depender da pessoa fechar e reabrir o app.
+    STORE.pullCFG().then(conferirAcesso);
     STORE.pull(atualizarPorSync);
     STORE.trySync();
   }, 60000);
@@ -444,6 +447,31 @@ async function boot() {
   document.addEventListener('visibilitychange', () => {
     if (document.visibilityState === 'visible') { STORE.pull(atualizarPorSync); STORE.trySync(); }
   });
+}
+
+// Desligar alguém no painel tem que TIRAR o acesso. Antes, quem já estava
+// logado seguia usando o app pra sempre (a sessão só era conferida no login).
+// Confere contra a config recém-baixada: sumiu da equipe ou foi desativado,
+// cai fora -- e o papel também é atualizado se o admin tiver mudado.
+function conferirAcesso() {
+  if (!SESSAO) return;
+  const cfg = STORE.getCFG();
+  const equipe = cfg.usuarios || [];
+  if (!equipe.length) return; // sem lista baixada não dá pra concluir nada
+  const u = equipe.find(x => norm(x.usuario) === norm(SESSAO.usuario));
+  if (!u || u.ativo === false) {
+    STORE.setUser(null); SESSAO = null; zerarEstadoDeTela();
+    location.hash = '#/login';
+    toast(u ? 'Seu acesso foi desativado pelo administrador.' : 'Seu usuário não está mais na equipe.', 'erro');
+    return;
+  }
+  // Papel rebaixado/promovido no painel vale na hora (um ex-admin não pode
+  // continuar com as ações de admin na mão).
+  if (u.papel && u.papel !== SESSAO.papel) {
+    SESSAO = Object.assign({}, SESSAO, { papel: u.papel, nome: u.nome || SESSAO.nome });
+    STORE.setUser(SESSAO);
+    toast('Seu perfil agora é ' + u.papel + '.', 'sucesso');
+  }
 }
 
 // Chamado quando a sincronização de fundo traz novidade. Na LISTA, troca só os
@@ -3944,7 +3972,7 @@ function ligarFichasEditor(alvo) {
   if (salvar) salvar.onclick = () => salvarFichas(alvo);
 }
 
-function salvarFichas(alvo) {
+async function salvarFichas(alvo) {
   // Valida nomes: sem nome vazio, sem repetido.
   const nomes = FICHAS_EDIT.map(s => String(s.nome || '').trim());
   if (nomes.some(n => !n)) { toast('Todo setor precisa de um nome.', 'erro'); return; }
@@ -3980,6 +4008,11 @@ function salvarFichas(alvo) {
     };
   });
 
+  // Busca a config ATUAL antes de gravar. A configuração da empresa (equipe,
+  // senhas, fichas, textos) mora num pacote só, e cada tela regrava o pacote
+  // inteiro. Sem este passo, salvar as fichas com o painel aberto desde cedo
+  // apagava quem tivesse sido cadastrado em outro aparelho no meio do dia.
+  await STORE.pullCFG();
   const cfg = STORE.getCFG();
   cfg.fichasSetores = mapa;
 
@@ -4052,17 +4085,23 @@ function adminUsuarios(alvo) {
       verSenha.textContent = escondida ? '🙈 Esconder' : '👁 Mostrar';
     };
     $('.btn-cancelar', m).onclick = () => m.remove();
-    $('.btn-salvar', m).onclick = () => {
+    $('.btn-salvar', m).onclick = async () => {
       const nome = $('#u-nome', m).value.trim();
       const usuario = $('#u-usuario', m).value.trim().toLowerCase();
       const papel = $('#u-papel', m).value;
       const senha = $('#u-senha', m).value;
       if (!nome || !usuario || (!u && !senha)) { toast('Preencha nome, usuário e senha', 'erro'); return; }
+      // Config atual antes de gravar (o pacote é único e esta tela regrava tudo).
+      await STORE.pullCFG();
       const cfg2 = STORE.getCFG();
       cfg2.usuarios = cfg2.usuarios || [];
       const adminsAtivos = cfg2.usuarios.filter(x => x.papel === 'admin' && x.ativo !== false);
       if (u) {
-        const alvoU = cfg2.usuarios[idx];
+        // Reencontra pelo NOME DE USUÁRIO: o índice da lista pode ter mudado se
+        // outro aparelho cadastrou alguém enquanto este modal estava aberto.
+        const idxAtual = cfg2.usuarios.findIndex(x => norm(x.usuario) === norm(u.usuario));
+        if (idxAtual < 0) { toast('Este usuário não existe mais na equipe.', 'erro'); m.remove(); adminUsuarios(alvo); return; }
+        const alvoU = cfg2.usuarios[idxAtual];
         if (alvoU.papel === 'admin' && adminsAtivos.length === 1 && adminsAtivos[0].usuario === alvoU.usuario && (papel !== 'admin' || !ativo)) {
           toast('Este é o único admin ativo. Crie outro admin antes de mudar este.', 'erro'); return;
         }
@@ -4291,7 +4330,11 @@ function adminConfig(alvo) {
   alvo.addEventListener('input', () => { _configSuja = true; });
   alvo.addEventListener('change', () => { _configSuja = true; });
 
-  $('#btn-salvar-config').onclick = () => {
+  $('#btn-salvar-config').onclick = async () => {
+    // Mesma razão do editor de fichas: a config é um pacote só e esta tela
+    // regrava o pacote inteiro. Busca o atual antes pra não apagar o que outro
+    // aparelho cadastrou enquanto esta tela estava aberta.
+    await STORE.pullCFG();
     const cfg2 = STORE.getCFG();
     cfg2.dicas = cfg2.dicas || {};
     $$('[data-dica]', alvo).forEach(t => { cfg2.dicas[t.dataset.dica] = t.value.trim(); });

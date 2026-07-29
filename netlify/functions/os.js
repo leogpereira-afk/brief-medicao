@@ -47,6 +47,29 @@ async function registrarLog(entrada) {
   }
 }
 
+// O aviso automático leva dados do cliente (nome, telefone, endereço) pra fora.
+// O endereço é cadastrável pelo app, e o TOKEN que autoriza isso está no bundle
+// -- então precisa de trava: só https, e nunca pra dentro da rede/nuvem (as
+// portas de metadados da nuvem entregam credencial da infra).
+// WEBHOOK_HOSTS (env, separado por vírgula) restringe ainda mais, se o dono quiser.
+function webhookPermitido(url) {
+  let u;
+  try { u = new URL(url); } catch { return false; }
+  if (u.protocol !== 'https:') return false;
+  const host = u.hostname.toLowerCase();
+  // Endereços internos / loopback / metadados da nuvem
+  if (host === 'localhost' || host.endsWith('.localhost') || host.endsWith('.internal') || host.endsWith('.local')) return false;
+  if (/^\d{1,3}(\.\d{1,3}){3}$/.test(host)) {
+    const [a, b] = host.split('.').map(Number);
+    if (a === 127 || a === 10 || a === 0 || a === 169 ||
+        (a === 172 && b >= 16 && b <= 31) || (a === 192 && b === 168)) return false;
+  }
+  if (host === '::1' || host.startsWith('[')) return false;
+  const lista = String(process.env.WEBHOOK_HOSTS || '').split(',').map(s => s.trim().toLowerCase()).filter(Boolean);
+  if (lista.length && !lista.some(h => host === h || host.endsWith('.' + h))) return false;
+  return true;
+}
+
 // Dispara o webhook (n8n) configurado no cfg. Timeout curto pra não segurar
 // a resposta do upsert; erro vira log, não erro pro cliente.
 async function dispararWebhook(payload) {
@@ -54,6 +77,10 @@ async function dispararWebhook(payload) {
     const cfg = await blobStore('cfg').get('cfg', { type: 'json' }).catch(() => null);
     const url = cfg && cfg.webhookUrl;
     if (!url) return { ok: false, motivo: 'sem URL configurada' };
+    if (!webhookPermitido(url)) {
+      console.warn('[os.js] webhook recusado (endereço não permitido)');
+      return { ok: false, motivo: 'endereço não permitido' };
+    }
     const ctrl = new AbortController();
     const timer = setTimeout(() => ctrl.abort(), 6000);
     try {
@@ -509,6 +536,9 @@ exports.handler = async (event, context) => {
           url = cfg && cfg.webhookUrl;
         }
         if (!url) return resp({ ok: false, motivo: 'Nenhuma URL de webhook configurada' });
+        if (!webhookPermitido(url)) {
+          return resp({ ok: false, motivo: 'Endereço não permitido. Use um endereço https público (o do n8n).' });
+        }
         const ctrl = new AbortController();
         const timer = setTimeout(() => ctrl.abort(), 6000);
         try {

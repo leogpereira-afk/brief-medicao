@@ -26,15 +26,38 @@ function blobStore(name) {
   return getStore(name);
 }
 
+// Hosts em que é seguro mandar o Access-Token do Mubisys.
+//
+// O `base` é cadastrável pelo app, e o TOKEN que autoriza esse cadastro está no
+// bundle (autenticação leve, decisão consciente). Sem esta trava, quem tivesse o
+// TOKEN podia apontar o `base` pro próprio servidor e o Brief entregaria a
+// credencial do ERP -- um alvo muito maior que o próprio Brief.
+// MUBISYS_BASE (env, que só o dono configura na Netlify) é sempre aceita.
+function baseConfiavel(url) {
+  let u;
+  try { u = new URL(url); } catch { return false; }
+  if (u.protocol !== 'https:') return false;
+  const envBase = String(process.env.MUBISYS_BASE || '').trim();
+  if (envBase) {
+    try { if (new URL(envBase).host === u.host) return true; } catch {}
+  }
+  const host = u.host.toLowerCase();
+  return host === 'mubisys.com' || host.endsWith('.mubisys.com');
+}
+
 // Resolve as credenciais: primeiro o cadastro feito no app, depois env vars.
 async function getCreds() {
   let cfg = null;
   try { cfg = await blobStore('integracoes').get('mubisys', { type: 'json' }); } catch {}
   cfg = cfg || {};
+  const baseBruta = String(cfg.base || process.env.MUBISYS_BASE || DEFAULT_BASE).replace(/\/+$/, '');
+  // Base fora da lista: cai no padrão em vez de vazar a credencial.
+  const base = baseConfiavel(baseBruta) ? baseBruta : DEFAULT_BASE;
+  if (base !== baseBruta) console.warn('[mubisys] base recusada (fora dos hosts confiáveis):', baseBruta);
   return {
     publicKey:   cfg.publicKey   || process.env.MUBISYS_PUBLIC_KEY || '',
     accessToken: cfg.accessToken || process.env.MUBISYS_TOKEN || '',
-    base:        ((cfg.base || process.env.MUBISYS_BASE || DEFAULT_BASE)).replace(/\/+$/, ''),
+    base,
     status:      cfg.status || 'PRODUCAO'
   };
 }
@@ -61,6 +84,11 @@ exports.handler = async (event) => {
     if (action === 'salvarConfig') {
       const store = blobStore('integracoes');
       const atual = (await store.get('mubisys', { type: 'json' }).catch(() => null)) || {};
+      // Recusa base fora dos hosts confiáveis já na gravação, pra o admin ver o
+      // erro em vez de a busca cair calada no padrão.
+      if (body.base && String(body.base).trim() && !baseConfiavel(String(body.base).trim().replace(/\/+$/, ''))) {
+        return resp({ error: 'Endereço do Mubisys não permitido. Use o endereço oficial (…mubisys.com).' }, 400);
+      }
       const novo = {
         // Vazio significa "mantém o atual" (não apaga a chave). Sem isto, salvar
         // o formulário em branco -- o que acontecia sem internet -- zerava tudo.
