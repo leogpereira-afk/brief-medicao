@@ -1,0 +1,65 @@
+name: Deploy (GitHub Pages)
+
+# Publica o Brief no GitHub Pages. O backend e o Supabase (Edge Functions
+# brief-sync / brief-mubisys), chamado direto pelo navegador.
+#
+# App vanilla: nao ha build. O passo abaixo so separa o que e SITE do que e
+# ferramenta de repositorio (netlify/, supabase/, scripts/), para nao publicar
+# codigo de servidor junto com a pagina.
+#
+# Nao precisa gerar 404.html: o Brief navega por # (hash), entao o Pages nunca
+# recebe um caminho que ele nao conheca -- diferente da SPA do RH.
+on:
+  push:
+    branches: [main]
+  workflow_dispatch: {}
+
+permissions:
+  contents: read
+  pages: write
+  id-token: write
+
+concurrency:
+  group: pages
+  cancel-in-progress: true
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Separar os arquivos do site
+        run: |
+          mkdir -p dist
+          rsync -a ./ dist/ \
+            --exclude dist/ \
+            --exclude .git/ \
+            --exclude .github/ \
+            --exclude .netlify/ \
+            --exclude netlify/ \
+            --exclude supabase/ \
+            --exclude scripts/ \
+            --exclude _audit_tmp/ \
+            --exclude node_modules/ \
+            --exclude package.json \
+            --exclude package-lock.json
+          echo "--- publicando: ---"
+          ls dist
+
+      - uses: actions/configure-pages@v5
+        with:
+          enablement: true
+      - uses: actions/upload-pages-artifact@v3
+        with:
+          path: dist
+
+  deploy:
+    needs: build
+    runs-on: ubuntu-latest
+    environment:
+      name: github-pages
+      url: ${{ steps.deployment.outputs.page_url }}
+    steps:
+      - id: deployment
+        uses: actions/deploy-pages@v4
