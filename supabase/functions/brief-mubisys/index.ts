@@ -171,10 +171,12 @@ function mapearMubisys(o: any) {
   };
 }
 
-// O PCP ainda expoe a acao "list" paginada (ele nao migrou ainda).
 async function buscarNoPCP(numero: string) {
   const base = PCP_URL.replace(/\/+$/, "");
-  const url = base + "/.netlify/functions/os";
+  // BRIEF_PCP_URL pode ser o site antigo (Netlify: monta o caminho da function)
+  // ou o endpoint NOVO completo (Edge Function: usa como esta). Aceitar os dois
+  // e o que permitiu trocar o secret na virada sem tocar em codigo de novo.
+  const url = base.includes("/functions/v1/") ? base : base + "/.netlify/functions/os";
   let after: unknown = null;
   for (let guard = 0; guard < 50; guard++) {
     const r = await fetchTimeout(url, {
