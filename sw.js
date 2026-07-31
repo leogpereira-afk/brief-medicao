@@ -3,7 +3,7 @@
 //
 // DISCIPLINA: bump no CACHE (v1 → v2 → …) A CADA deploy, senão os aparelhos
 // ficam presos na versão antiga.
-const CACHE = 'brief-shell-v40';
+const CACHE = 'brief-shell-v41';
 const SHELL = [
   './', 'index.html', 'config.js', 'store.js', 'app.js', 'pdf.js', 'prancha.js', 'styles.css', 'sw.js',
   'manifest.webmanifest', 'logo-impresilk.png', 'logo-impresilk-branco.png',
@@ -41,6 +41,9 @@ self.addEventListener('fetch', e => {
   const url = new URL(req.url);
 
   // Nunca cachear a API — o store.js já trata offline pela fila.
+  // O backend agora é o Supabase; a regra do Netlify vira letra morta quando o
+  // site velho morrer, mas fica até lá (durante a transição os dois respondem).
+  if (url.hostname.endsWith('supabase.co')) return;
   if (url.pathname.includes('/.netlify/functions/')) return;
 
   // Network-first: online pega a versão nova e atualiza o cache; offline cai no cache.

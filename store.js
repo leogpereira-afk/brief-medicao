@@ -265,13 +265,21 @@ const STORE = (() => {
     return apiFn('os', body);
   }
 
-  // Chama qualquer Netlify Function do projeto (os, mubisys, …) com timeout.
+  // Chama uma função do backend (os, mubisys, …) com timeout.
+  //
+  // O endereço vem do config.js: hoje são Edge Functions do Supabase, antes eram
+  // Netlify Functions. O resto do app não sabe da diferença — continua pedindo
+  // 'os' e 'mubisys', e a tradução para o nome real acontece aqui.
   async function apiFn(fn, body, timeoutMs = 15000) {
     // Timeout: em sinal fraco, navigator.onLine pode ser true mas o fetch trava.
     const ctrl = new AbortController();
     const timer = setTimeout(() => ctrl.abort(), timeoutMs);
     try {
-      const res = await fetch('/.netlify/functions/' + fn, {
+      const alvo = (typeof API_FN === 'object' && API_FN[fn]) || fn;
+      const url = (typeof API_BASE === 'string' && API_BASE)
+        ? API_BASE + '/' + alvo
+        : '/.netlify/functions/' + fn; // volta ao Netlify se o config for antigo
+      const res = await fetch(url, {
         method:  'POST',
         headers: { 'Content-Type': 'application/json', 'x-token': TOKEN },
         body:    JSON.stringify(body),
