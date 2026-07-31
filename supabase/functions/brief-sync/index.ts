@@ -575,6 +575,106 @@ Deno.serve(async (req: Request) => {
         }
       }
 
+      // Manutencao diaria (substitui a scheduled function "manutencao" do
+      // Netlify, que rodava @daily). Chamada pelo pg_cron -- ver a migration
+      // 0004. Faz as tres coisas que a antiga fazia, na mesma ordem.
+      case "manutencao": {
+        const DIAS_LIXEIRA = 30;
+        const DIAS_LOG = 90;
+        const agora = Date.now();
+        const corteLixeira = new Date(agora - DIAS_LIXEIRA * 864e5).toISOString();
+        const corteLog = new Date(agora - DIAS_LOG * 864e5).toISOString();
+
+        let purgados = 0;
+        let logsRemovidos = 0;
+        try {
+          // 1) Lixeira: briefing apagado ha mais de 30 dias some de vez, com as
+          // fotos junto -- e o que a tela do admin promete ao usuario.
+          for (const b of await todosRegs("os")) {
+            if (!b?.apagadoEm || b.apagadoEm >= corteLixeira) continue;
+            const ids = fotoIdsDoBriefing(b);
+            if (ids.length) await sb.storage.from(BUCKET).remove(ids).catch(() => {});
+            await delReg("os", b.id);
+            purgados++;
+          }
+
+          // 2) Log antigo. As chaves sao "log_<ISO>_<sufixo>", entao a
+          // comparacao de texto ja resolve a data -- e o banco apaga em lote,
+          // sem precisar carregar entrada por entrada como o Blobs exigia.
+          const { count } = await sb
+            .from("brief_registros")
+            .delete({ count: "exact" })
+            .eq("colecao", "log")
+            .lt("id", "log_" + corteLog);
+          logsRemovidos = count ?? 0;
+
+          // 3) Batimento: a acao "saude" le isto para mostrar no painel quando
+          // a ultima manutencao rodou. Sem ele, ninguem percebe se o cron parar.
+          await setMeta("manutencao_status", {
+            em: new Date().toISOString(),
+            ok: true,
+            purgados,
+            logsRemovidos,
+          });
+          return resp({ ok: true, purgados, logsRemovidos });
+        } catch (e) {
+          // Falha tambem e registrada: um cron que quebra em silencio e pior
+          // que um cron que nao existe.
+          await setMeta("manutencao_status", {
+            em: new Date().toISOString(),
+            ok: false,
+            erro: (e as Error)?.message ?? String(e),
+          }).catch(() => {});
+          throw e;
+        }
+      }
+
+      // Manutencao diaria. No Netlify era uma function agendada a parte
+      // (manutencao.mjs, @daily); aqui e uma acao chamada pelo pg_cron. Faz as
+      // mesmas tres coisas: purga a lixeira vencida, apara o log velho e deixa
+      // o batimento que a tela de saude le.
+      case "manutencao": {
+        const DIAS_LIXEIRA = 30;
+        const DIAS_LOG = 90;
+        const agora = Date.now();
+        const corteLixeira = new Date(agora - DIAS_LIXEIRA * 864e5).toISOString();
+        const corteLog = new Date(agora - DIAS_LOG * 864e5).toISOString();
+
+        let purgados = 0;
+        let logsRemovidos = 0;
+        try {
+          for (const b of await todosRegs("os")) {
+            if (!b?.apagadoEm || b.apagadoEm >= corteLixeira) continue;
+            const ids = fotoIdsDoBriefing(b);
+            if (ids.length) await sb.storage.from(BUCKET).remove(ids).catch(() => {});
+            await delReg("os", b.id);
+            purgados++;
+          }
+
+          // As chaves do log sao "log_<ISO>_<sufixo>": no Postgres da para apagar
+          // por faixa de chave numa tacada, em vez de varrer registro a registro.
+          const { count } = await sb
+            .from("brief_registros")
+            .delete({ count: "exact" })
+            .eq("colecao", "log")
+            .lt("id", "log_" + corteLog);
+          logsRemovidos = count ?? 0;
+
+          await setMeta("manutencao_status", {
+            em: new Date().toISOString(), ok: true, purgados, logsRemovidos,
+          });
+          console.log(`[manutencao] lixeira: ${purgados}; log: ${logsRemovidos}`);
+          return resp({ ok: true, purgados, logsRemovidos });
+        } catch (e) {
+          // Grava a falha no batimento: a tela de saude precisa mostrar que a
+          // manutencao parou, senao ela morre em silencio por meses.
+          await setMeta("manutencao_status", {
+            em: new Date().toISOString(), ok: false, erro: (e as Error)?.message ?? String(e),
+          }).catch(() => {});
+          throw e;
+        }
+      }
+
       default:
         return resp({ error: `Ação desconhecida: ${action}` }, 400);
     }
