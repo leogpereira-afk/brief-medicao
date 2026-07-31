@@ -4,11 +4,6 @@
 [functions]
   directory = "netlify/functions"
 
-# Manutenção automática diária: esvazia a lixeira com mais de 30 dias
-# e apaga registros de log com mais de 90 dias.
-[functions."manutencao"]
-  schedule = "@daily"
-
 [[headers]]
   for = "/*"
   [headers.values]
