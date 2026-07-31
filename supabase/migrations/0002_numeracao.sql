@@ -1,0 +1,14 @@
+-- ============================================================================
+-- Numeracao dos briefings.
+--
+-- No Blobs isso era feito reivindicando uma chave por numero (num_1, num_2...)
+-- com onlyIfNew, porque o Blobs nao tem contador atomico: entre N chamadas
+-- simultaneas gravando a mesma chave nova, exatamente UMA vencia. Funcionava,
+-- mas exigia um laco de ate 1000 tentativas a cada briefing novo.
+--
+-- O Postgres tem contador atomico de verdade. nextval() nunca devolve o mesmo
+-- numero para duas transacoes concorrentes -- mesma garantia, uma linha de
+-- codigo, sem laco. O valor inicial e acertado na migracao dos dados (setval
+-- acima do maior numeroBrief que existir hoje).
+-- ============================================================================
+create sequence if not exists public.brief_numero_seq as bigint start with 1;
