@@ -386,12 +386,15 @@ const PRANCHA = (() => {
       doc.setFillColor(...(modelo.cor || MODELO_PADRAO.cor));
       doc.rect(xSelo + 0.4, y0 + 0.4, wSelo - 0.8, linha - 0.8, 'F');
       doc.setFont('Poppins', 'normal'); doc.setTextColor(...(modelo.corTexto || [255, 255, 255]));
+      // Recalcula a quebra A CADA fonte (encolher sem requebrar pulava direto
+      // pra 7pt); se mesmo a 7pt não couber em 2 linhas, desenha a 3ª em vez
+      // de cortá-la -- a faixa tem altura pra isso.
       let fs = 12;
       doc.setFontSize(fs);
-      const linhasSelo = doc.splitTextToSize(selo, wSelo - 10);
-      while (linhasSelo.length > 2 && fs > 7) { fs -= 1; doc.setFontSize(fs); }
-      const ls = doc.splitTextToSize(selo, wSelo - 10).slice(0, 2);
-      const yBase = y0 + linha / 2 + (ls.length === 1 ? 4 : -1);
+      let ls = doc.splitTextToSize(selo, wSelo - 10);
+      while (ls.length > 2 && fs > 7) { fs -= 1; doc.setFontSize(fs); ls = doc.splitTextToSize(selo, wSelo - 10); }
+      ls = ls.slice(0, 3);
+      const yBase = y0 + linha / 2 + (ls.length === 1 ? 4 : ls.length === 2 ? -1 : -1 - (fs + 1) / 2);
       ls.forEach((l, i) => doc.text(l, xSelo + wSelo / 2, yBase + i * (fs + 1), { align: 'center' }));
     }
     caixa(doc, xSelo, y0 + linha, wSelo, altura - linha);
@@ -559,11 +562,13 @@ const PRANCHA = (() => {
     // Título
     caixa(doc, x, y, largura, hTitulo);
     doc.setFont('Poppins', 'normal'); doc.setFontSize(fsTitulo); doc.setTextColor(...PRETO);
-    doc.text(tab.titulo, x + wCheck + wRotulo / 2, y + hTitulo * 0.7, { align: 'center' });
+    // Título e nomes de coluna vêm do editor do admin SEM limite: encolhe até
+    // caber em vez de invadir a célula vizinha.
+    textoQueCabe(doc, tab.titulo, x + wCheck + wRotulo / 2, y + hTitulo * 0.7, wRotulo - 6, fsTitulo, 4.6);
     cols.forEach((c, i) => {
       const cx = x + wCheck + wRotulo + i * wCol;
       caixa(doc, cx, y, wCol, hTitulo);
-      if (c) { doc.setFontSize(Math.max(5.2, 6.6 * k)); doc.text(c, cx + wCol / 2, y + hTitulo * 0.67, { align: 'center' }); }
+      if (c) textoQueCabe(doc, c, cx + wCol / 2, y + hTitulo * 0.67, wCol - 4, Math.max(5.2, 6.6 * k), 4.6);
     });
 
     let yy = y + hTitulo;
@@ -695,7 +700,11 @@ const PRANCHA = (() => {
   // prancha entrar em modo resumo e sair com o corpo vazio.
   function fichaTemAlgo(ficha, modelo) {
     if (!ficha) return false;
-    if (ficha.soltas && Object.values(ficha.soltas).some(Boolean)) return true;
+    // Só marca de caixa que AINDA existe no modelo: uma marca órfã (o admin
+    // apagou a caixa depois) forçava o modo resumo e a prancha regerada saía
+    // com o corpo em branco.
+    if (((modelo && modelo.caixasSoltas) || []).some((rot, i) =>
+      ficha.soltas && (ficha.soltas['s:' + norm(rot)] || ficha.soltas[i]))) return true;
     const temConteudo = (t) => {
       if (!t) return false;
       if (String(t.outros || '').trim()) return true;
@@ -733,8 +742,11 @@ const PRANCHA = (() => {
     // coluna não usa vira espaço pra imagem, que é o que a produção precisa ver.
     const X0 = M + 4;
     const tabelas = modelo.tabelas || [];
+    // Chave por rótulo ('s:'+norm), com queda pro índice pras pranchas antigas:
+    // gravar só por posição fazia reordenar/inserir caixa no admin trocar as
+    // marcas (GRAVAÇÃO virava DTF) ao regerar uma prancha salva.
     const soltasVisiveis = (modelo.caixasSoltas || [])
-      .map((rot, i) => ({ rot, i, marcada: !!(ficha.soltas && ficha.soltas[i]) }))
+      .map((rot, i) => ({ rot, i, marcada: !!(ficha.soltas && (ficha.soltas['s:' + norm(rot)] !== undefined ? ficha.soltas['s:' + norm(rot)] : ficha.soltas[i])) }))
       .filter(s => !compacto || s.marcada);
 
     // Mede tudo ANTES de desenhar: se a ficha em branco de um setor grande não
@@ -752,7 +764,11 @@ const PRANCHA = (() => {
     });
     const disponivel = alturaCorpo - 8;
     // Piso de 0,62: abaixo disso a letra ficaria pequena demais pro chão de fábrica.
-    const escala = alturaBruta > disponivel ? Math.max(0.62, disponivel / alturaBruta) : 1;
+    // As caixas soltas ficam FORA da conta: são desenhadas com altura fixa
+    // (16pt), então escalá-las na medição fazia a coluna invadir o rodapé.
+    const escalavel = alturaBruta - alturaSoltas;
+    const sobra = disponivel - alturaSoltas;
+    const escala = escalavel > sobra ? Math.max(0.62, Math.max(0, sobra) / Math.max(1, escalavel)) : 1;
 
     let yTab = yCorpo + 4;
     let larguraTabelas = 0;
@@ -818,7 +834,7 @@ const PRANCHA = (() => {
     // A imagem fica no que sobrou ENTRE o título e as medidas.
     const yImg = yTopoArte + altTitulo;
     const hImg = Math.max(40, hArte - altTitulo - altMedidas);
-    let xMedidas = xArte;   // as medidas acompanham a arte, não a margem
+    const xMedidas = xArte; // as medidas acompanham a coluna da arte
     if (p.imagem) {
       const dims = await medirImagem(p.imagem);
       const prop = dims ? dims.h / dims.w : 0.72;
@@ -829,7 +845,9 @@ const PRANCHA = (() => {
       // Moldura fina: a arte fica com cara de peça, não de imagem solta na folha.
       doc.setDrawColor(...BORDA); doc.setLineWidth(0.8);
       doc.rect(ix, iy, w, h);
-      xMedidas = ix;
+      // As medidas foram QUEBRADAS em wArte a partir de xArte -- desenhá-las a
+      // partir do x da imagem centrada empurrava o fim das linhas pra fora da
+      // folha. Ficam na coluna da arte, que é o alinhamento prometido.
     } else {
       // SEM arte a prancha é pra desenhar à mão: demarca a área com um quadro
       // pontilhado, em vez de deixar um vazio sem referência na folha.
@@ -841,7 +859,6 @@ const PRANCHA = (() => {
       doc.setLineDashPattern([], 0);
       doc.setFont('Poppins', 'normal'); doc.setFontSize(8); doc.setTextColor(170, 170, 170);
       doc.text('espaço para o desenho', mx + mw / 2, my + mh / 2, { align: 'center' });
-      xMedidas = mx;
     }
 
     // Medidas logo abaixo da arte, alinhadas com ela. Antes ficavam presas à
@@ -852,7 +869,9 @@ const PRANCHA = (() => {
     }
 
     // Carimbos são opcionais: só saem quando o designer marca na prévia
-    if (p.urgente) carimboUrgente(doc, W - 78, yCorpo + 56);
+    // Abaixo do título: o disco branco do carimbo apagava o fim de um título
+    // longo. Sem título, altTitulo é 0 e nada muda.
+    if (p.urgente) carimboUrgente(doc, W - 78, yCorpo + 56 + altTitulo);
     if (p.espelhado) carimboEspelhado(doc, W * 0.42, yFimCorpo - 130);
     rodapeLiberacao(doc, modelo.rodape, H - 14);
   }

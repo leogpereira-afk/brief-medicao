@@ -104,11 +104,20 @@ const STORE = (() => {
   function saveOS(os) {
     const all = getAllOS();
     const idx = all.findIndex(o => o.id === os.id);
+    // Versão-base: o atualizadoEm que ESTE aparelho conhecia antes desta
+    // edição. Viaja no item da fila; o servidor compara com o que tem gravado
+    // e devolve conflito quando OUTRO aparelho editou no meio -- sem isso, a
+    // edição alheia do último minuto era sobrescrita em silêncio (o teste por
+    // "quem tem timestamp maior" nunca dispara nesse sentido).
+    const base = idx >= 0 ? (all[idx].atualizadoEm || null) : null;
     if (idx >= 0) all[idx] = os;
     else all.push(os);
     const ok = _setAllOS(all);
     if (!ok) return false;        // sem gravar o cache, não faz sentido enfileirar
-    _enqueue({ action: 'upsert', os });
+    // Fila cheia (quota) = NÃO salvou de verdade: sem o item na fila o registro
+    // não está em pendingIds e o pull o varreria em ~3min. O false chega ao
+    // editor ("⚠ Não salvou") e o autosave de 600ms vira o retry natural.
+    if (!_enqueue({ action: 'upsert', os, baseAtualizadoEm: base })) return false;
     // O dado JÁ está salvo local e na fila. O envio pro servidor é agrupado:
     // digitar um briefing dispara autosave a cada 600ms, e mandar o briefing
     // INTEIRO pra rede a cada tecla deixava o app pesado no celular. A fila
@@ -190,6 +199,11 @@ const STORE = (() => {
 
   // ── Fila offline ──────────────────────────────────────────────────────────
   function getQueue() { return lsGet(K.FILA, []); }
+  // Quantos itens da fila já falharam várias vezes seguidas -- o chip usa isso
+  // pra trocar "N pendente(s)" (parece saudável) por um aviso com erro.
+  function filaComErro() {
+    return getQueue().filter(it => (_failCount.get(_sigFila(it)) || 0) >= 5).length;
+  }
   // Ids de briefings que ainda têm upsert na fila (não confirmados pelo servidor).
   function idsNaFila() {
     const s = new Set();
@@ -197,12 +211,24 @@ const STORE = (() => {
     return s;
   }
 
+  // Devolve o resultado do lsSet: false = quota estourada, o item NÃO está na
+  // fila. Quem chama precisa propagar (saveOS devolve false e o editor mostra
+  // "não salvou"). Engolir isso fazia o app dizer "✓ Salvo" com o item fora da
+  // fila -- e o pull apagava o briefing do aparelho 3 minutos depois.
   function _enqueue(item) {
     let q = getQueue();
     // Deduplica upserts da mesma O.S
     if (item.action === 'upsert') {
       const i = q.findIndex(x => x.action === 'upsert' && x.os.id === item.os.id);
-      if (i >= 0) { q[i] = item; lsSet(K.FILA, q); return; }
+      if (i >= 0) {
+        // O substituto HERDA a versão-base do item original: ela aponta pra
+        // última versão CONFIRMADA pelo servidor que este aparelho viu. Sem a
+        // herança, a 2ª edição local usaria a 1ª (ainda não enviada) como base
+        // e geraria falso conflito contra o próprio trabalho.
+        if ('baseAtualizadoEm' in q[i]) item.baseAtualizadoEm = q[i].baseAtualizadoEm;
+        q[i] = item;
+        return lsSet(K.FILA, q);
+      }
     }
     // Quando deleta uma O.S, descarta upserts pendentes dela (não faz sentido
     // mandar uma versão "atualizada" de algo que vai ser apagado em seguida).
@@ -210,8 +236,7 @@ const STORE = (() => {
       q = q.filter(x => !(x.action === 'upsert' && x.os && x.os.id === item.id));
       // Se já existe um delete pra mesma id na fila, evita duplicar.
       if (q.some(x => x.action === 'delete' && x.id === item.id)) {
-        lsSet(K.FILA, q);
-        return;
+        return lsSet(K.FILA, q);
       }
     }
     // Deletar uma foto descarta o upload pendente dela (senão o servidor
@@ -219,12 +244,11 @@ const STORE = (() => {
     if (item.action === 'deletePhoto') {
       q = q.filter(x => !(x.action === 'putPhoto' && x.fileId === item.fileId));
       if (q.some(x => x.action === 'deletePhoto' && x.fileId === item.fileId)) {
-        lsSet(K.FILA, q);
-        return;
+        return lsSet(K.FILA, q);
       }
     }
     q.push(item);
-    lsSet(K.FILA, q);
+    return lsSet(K.FILA, q);
   }
 
   // Assinatura estável de um item da fila (independe da referência do objeto).
@@ -344,7 +368,18 @@ const STORE = (() => {
   // Contagem de falhas por item (chave = _sigFila). Item que falha N vezes
   // sai da fila pra não inchar o localStorage indefinidamente.
   const _failCount = new Map();
-  const MAX_FAILS = 25;
+  const MAX_FAILS = 25;       // erro 4xx: o servidor recusou o item de vez
+  const MAX_FAILS_5XX = 50;   // erro 5xx: o servidor respondeu, mas quebrando -- teto maior
+  // Backoff por item: um item que acabou de falhar espera antes de retentar,
+  // SEM sair da fila e SEM travar os itens de trás. Antes, a primeira falha
+  // 5xx/timeout dava `break` no ciclo inteiro: o item envenenado virava a
+  // cabeça da fila e nada atrás dele subia nunca mais -- com o chip mostrando
+  // só "N pendente(s)", igual a uma fila saudável.
+  const _skipAte = new Map();
+  // Briefing a que um item da fila se refere (pra preservar a ordem relativa
+  // upsert/delete do MESMO registro quando um deles é pulado).
+  const _idDoItem = it =>
+    (it.action === 'upsert' && it.os && it.os.id) || (it.action === 'delete' && it.id) || '';
 
   async function trySync() {
     if (_syncing) return;
@@ -356,20 +391,39 @@ const STORE = (() => {
     _notifySync('pending', q.length);
 
     let consecutiveNetFails = 0;
+    let servidorVenceu = 0;
+    // Registros com item pulado NESTE ciclo: os itens seguintes do mesmo
+    // registro também esperam, senão um delete passaria na frente do upsert.
+    const puladosIds = new Set();
     for (const item of [...q]) {
       const sig = _sigFila(item);
+      const rid = _idDoItem(item);
       // Pula itens em conflito até o usuário resolver.
-      if (_flagged.has(sig)) continue;
+      if (_flagged.has(sig)) { if (rid) puladosIds.add(rid); continue; }
+      if (rid && puladosIds.has(rid)) continue;
+      // Item em backoff (falhou há pouco): espera a vez dele, segue pros outros.
+      if ((_skipAte.get(sig) || 0) > Date.now()) { if (rid) puladosIds.add(rid); continue; }
       try {
         if (item.action === 'putPhoto') {
           let base64 = item.base64;
           if (!base64) { const f = await getFoto(item.fileId); base64 = f && f.base64; }
           if (!base64) { _removeFromQueue(item); _failCount.delete(sig); continue; }
-          const res = await api({ action: 'putPhoto', base64, mime: item.mime, fileId: item.fileId });
+          // Timeout proporcional ao tamanho: 500 KB em sinal fraco não completa
+          // em 15s nunca -- abortava, retentava o MESMO item e queimava rádio.
+          const tFoto = Math.min(120000, 15000 + Math.round(base64.length / 10));
+          const res = await apiFn('os', { action: 'putPhoto', base64, mime: item.mime, fileId: item.fileId }, tFoto);
           if (res && res.fileId) { _removeFromQueue(item); _failCount.delete(sig); }
         } else {
           const res = await api(item);
           if (res && res.conflito) {
+            // Item de restauração de backup: o servidor tem versão mais nova
+            // -> servidor vence, sem modal (um arquivo antigo não pode
+            // reverter o que a equipe fez desde então).
+            if (item.origem === 'import') {
+              aceitarServidor(res.servidor);
+              servidorVenceu++;
+              continue;
+            }
             _flagged.add(sig);                 // não retentar até resolução
             _notifyConflict(item.os, res.servidor);
             continue;                          // segue para o próximo item
@@ -395,38 +449,65 @@ const STORE = (() => {
               }
               _setAllOS(all);
             }
+            // Se sobrou um upsert mais novo na fila (edição feita durante o
+            // envio), a base dele passa a ser a versão que o servidor acabou
+            // de confirmar -- senão o próximo envio geraria falso conflito.
+            const q2 = getQueue();
+            const qi = q2.findIndex(x => x.action === 'upsert' && x.os && x.os.id === res.os.id);
+            if (qi >= 0 && 'baseAtualizadoEm' in q2[qi]) {
+              q2[qi].baseAtualizadoEm = res.os.atualizadoEm || null;
+              lsSet(K.FILA, q2);
+            }
           }
         }
         consecutiveNetFails = 0;
+        _skipAte.delete(sig);
       } catch (e) {
-        // Distingue falha de rede (parar o ciclo) de erro permanente do item
-        // (incrementa contador; quando estourar, descarta o item pra não travar).
+        // Três classes de falha:
+        //   HTTP 4xx  -> o servidor RECUSOU o item: conta rápido (25) e descarta.
+        //   HTTP 5xx  -> o servidor respondeu quebrando: pode ser permanente
+        //                (Storage recusando a foto toda vez) -- conta devagar (50)
+        //                e TAMBÉM descarta, senão a válvula nunca alcança.
+        //   sem HTTP  -> timeout/abort/queda: indistinguível de sinal ruim, NUNCA
+        //                descarta (descartar aqui perderia trabalho de verdade).
+        // Em todas: backoff só no item, o resto da fila continua subindo.
         const msg = (e && e.message) || '';
-        const isNetwork = !msg.startsWith('HTTP ') || /HTTP 5\d\d/.test(msg);
-        if (isNetwork) {
-          consecutiveNetFails++;
-          if (consecutiveNetFails >= 1) break; // sai do loop, tenta no próximo trySync
+        const e5xx = /^HTTP 5\d\d/.test(msg);
+        const conexao = !msg.startsWith('HTTP ');
+        const n = (_failCount.get(sig) || 0) + 1;
+        if (!conexao) _failCount.set(sig, n);
+        const teto = e5xx ? MAX_FAILS_5XX : MAX_FAILS;
+        if (!conexao && n >= teto) {
+          console.warn('[store] descartando item após', n, 'falhas:', sig, msg);
+          _removeFromQueue(item);
+          _failCount.delete(sig);
+          _skipAte.delete(sig);
+          // Não some em silêncio: marca o PRÓPRIO briefing como "não subiu",
+          // pra a lista poder mostrar isso em vez de ele parecer sincronizado.
+          if (item.action === 'upsert' && item.os && item.os.id) {
+            const all = getAllOS();
+            const idx = all.findIndex(o => o.id === item.os.id);
+            if (idx >= 0) { all[idx]._syncFalhou = true; all[idx]._syncMotivo = msg; _setAllOS(all); }
+          }
+          _notifyListeners('item-descartado', { item, motivo: msg });
         } else {
-          const n = (_failCount.get(sig) || 0) + 1;
-          _failCount.set(sig, n);
-          if (n >= MAX_FAILS) {
-            console.warn('[store] descartando item após', n, 'falhas:', sig, msg);
-            _removeFromQueue(item);
-            _failCount.delete(sig);
-            // Não some em silêncio: marca o PRÓPRIO briefing como "não subiu",
-            // pra a lista poder mostrar isso em vez de ele parecer sincronizado.
-            if (item.action === 'upsert' && item.os && item.os.id) {
-              const all = getAllOS();
-              const idx = all.findIndex(o => o.id === item.os.id);
-              if (idx >= 0) { all[idx]._syncFalhou = true; all[idx]._syncMotivo = msg; _setAllOS(all); }
-            }
-            _notifyListeners('item-descartado', { item, motivo: msg });
+          // Backoff exponencial por item: 8s -> 16s -> ... -> 2min.
+          _skipAte.set(sig, Date.now() + Math.min(120000, 8000 * Math.pow(2, Math.min(n - 1, 4))));
+          if (rid) puladosIds.add(rid);
+          if (conexao || e5xx) {
+            consecutiveNetFails++;
+            // DOIS itens diferentes falhando em sequência = rede fora de
+            // verdade: aí parar o ciclo inteiro é o comportamento certo.
+            if (consecutiveNetFails >= 2) break;
           }
         }
       }
     }
 
     _syncing = false;
+    if (servidorVenceu) {
+      _notifyListeners('restauracao-servidor', { n: servidorVenceu });
+    }
     const remaining = getQueue();
     _notifySync(remaining.length ? (navigator.onLine ? 'pending' : 'offline') : 'ok', remaining.length);
     // Sobrou item na fila (entrou durante o envio, ou falhou por rede)? Re-agenda
@@ -520,7 +601,12 @@ const STORE = (() => {
         const t = o.atualizadoEm || o.criadoEm;
         return t && (agoraMs - new Date(t).getTime()) < GRACA_MS;
       };
-      const sobreviventes = local.filter(o => remoteIds.has(o.id) || pendingIds.has(o.id) || recente(o));
+      // _syncFalhou também protege: o briefing descartado da fila após MAX_FAILS
+      // não está no servidor (nunca subiu) nem na fila (foi descartado) e já
+      // passou da carência — sem esta guarda, o pull o apagava do aparelho antes
+      // de o vendedor tocar em "NÃO SUBIU" pra reenviar. Ele nunca subiu, logo
+      // não existe no servidor: a proteção não ressuscita nada apagado de verdade.
+      const sobreviventes = local.filter(o => remoteIds.has(o.id) || pendingIds.has(o.id) || recente(o) || o._syncFalhou);
       if (sobreviventes.length !== local.length) {
         changed = true;
         local.length = 0;
@@ -538,8 +624,16 @@ const STORE = (() => {
           const porId = new Map(local.map(o => [o.id, o]));
           atual.forEach(o => {
             const noPull = porId.get(o.id);
-            if (!noPull) return;
-            // Campos que o SERVIDOR atribui e o pull pode não ter visto ainda.
+            // Briefing criado DURANTE o pull: sem esta linha, gravar o retrato
+            // o apagaria do cache até o próximo ciclo.
+            if (!noPull) { local.push(o); return; }
+            // Edição local mais nova que o retrato do pull GANHA inteira --
+            // era a medição digitada durante o pull que sumia da tela.
+            const tsA = o.atualizadoEm ? new Date(o.atualizadoEm).getTime() : 0;
+            const tsP = noPull.atualizadoEm ? new Date(noPull.atualizadoEm).getTime() : 0;
+            if (tsA > tsP) { Object.assign(noPull, o); return; }
+            // Campos que o SERVIDOR atribui e o pull pode não ter visto ainda
+            // (o trySync não mexe no atualizadoEm quando houve edição local).
             if (o.numeroBrief && !noPull.numeroBrief) noPull.numeroBrief = o.numeroBrief;
             // Marca de falha de envio é estado local: não deixa o pull limpar.
             if (o._syncFalhou && !noPull._syncFalhou) { noPull._syncFalhou = true; noPull._syncMotivo = o._syncMotivo; }
@@ -563,19 +657,25 @@ const STORE = (() => {
   }
 
   // ── pullCFG ───────────────────────────────────────────────────────────────
+  // Devolve true quando a config local está EM DIA (baixou agora, ou há um
+  // setCfg local pendente que é mais novo que o servidor). Devolve false
+  // quando NÃO conseguiu conferir (offline/erro) -- as telas de admin usam
+  // isso como trava: salvar por cima sem ter relido regravava o pacote velho
+  // da empresa inteiro quando a conexão voltava.
   async function pullCFG() {
-    if (!navigator.onLine) return;
+    if (!navigator.onLine) return false;
     // Se há um setCfg pendente na fila, a config local é mais nova que a do
     // servidor — não sobrescrever (evita perder níveis/usuários/funcionários
     // editados offline). O trySync envia a versão local em seguida.
-    if (getQueue().some(x => x.action === 'setCfg')) return;
+    if (getQueue().some(x => x.action === 'setCfg')) return true;
     try {
       const res = await api({ action: 'getCfg' });
       if (res.cfg && Object.keys(res.cfg).length) {
         const merged = Object.assign(getCFG(), res.cfg);
         lsSet(K.CFG, merged);
       }
-    } catch {}
+      return true;
+    } catch { return false; }
   }
 
   // ── Fotos ─────────────────────────────────────────────────────────────────
@@ -700,6 +800,12 @@ const STORE = (() => {
     localOS.atualizadoEm = new Date().toISOString();
     _flagged.delete('upsert:' + localOS.id);
     saveOS(localOS);
+    // "Manter a minha" é sobrescrita DELIBERADA: tira a versão-base do item
+    // pra o servidor não devolver o mesmo conflito de novo (sem base ele cai
+    // no critério antigo de timestamp, que o carimbo acima satisfaz).
+    const q = getQueue();
+    const i = q.findIndex(x => x.action === 'upsert' && x.os && x.os.id === localOS.id);
+    if (i >= 0) { delete q[i].baseAtualizadoEm; lsSet(K.FILA, q); }
   }
 
   // ── Reconexão automática ───────────────────────────────────────────────────
@@ -716,23 +822,47 @@ const STORE = (() => {
     };
   }
 
-  function importarBackup(data) {
+  async function importarBackup(data) {
     if (!data || !Array.isArray(data.os)) throw new Error('Arquivo inválido');
+    const regs = data.os.filter(o => o && o.id);
     const ok = _setAllOS(data.os);
     if (!ok) throw new Error('Não coube no armazenamento do aparelho');
     if (data.cfg) lsSet(K.CFG, data.cfg);
-    // Zera a fila ANTES: referências a IDs que sumiram no backup virariam erros
-    // eternos no servidor.
-    lsSet(K.FILA, []);
+    // A fila antiga referencia IDs que podem ter sumido no arquivo -- zera.
+    // MAS os putPhoto são autossuficientes (base64 no IndexedDB, que o import
+    // não toca) e continuam valendo: preservá-los.
+    const fotosPendentes = getQueue().filter(x => x.action === 'putPhoto');
+    // RE-ENFILEIRA os briefings do arquivo, numa gravação SÓ (laço de _enqueue
+    // relia e regravava a fila inteira a cada item, e engolia quota calado).
+    // Sem a fila eles não entram em pendingIds e o pull os varre em minutos.
+    // origem:'import' marca o item: se o servidor tiver versão MAIS NOVA, o
+    // conflito se resolve sozinho a favor do servidor -- restauração não pode
+    // reverter o trabalho da equipe nem abrir um modal por briefing.
+    const fila = fotosPendentes.concat(regs.map(os => ({ action: 'upsert', os, origem: 'import' })));
+    if (!lsSet(K.FILA, fila)) {
+      lsSet(K.FILA, fotosPendentes);
+      throw new Error('Backup grande demais pra este aparelho — importe num computador');
+    }
     _flagged.clear();
     _failCount.clear();
-    // E RE-ENFILEIRA tudo que veio no arquivo. Sem isto o import não restaurava
-    // nada de verdade: os registros não estavam no servidor nem na fila, e o
-    // primeiro pull (menos de um minuto depois) os varria do cache como se
-    // tivessem sido apagados em outro aparelho. Na fila eles entram em
-    // `pendingIds`, sobrevivem à varredura e sobem pro servidor.
-    for (const os of data.os) {
-      if (os && os.id) _enqueue({ action: 'upsert', os });
+    _skipAte.clear();
+    // O arquivo NÃO contém fotos. As que existirem NESTE aparelho (IndexedDB)
+    // sobem junto -- putPhoto no servidor é upsert de arquivo, re-enviar o que
+    // já existe é inofensivo -- cobrindo a restauração pós-perda do servidor.
+    const naFila = new Set(fotosPendentes.map(x => x.fileId));
+    const ids = [];
+    for (const os of regs) {
+      (os.itens || []).forEach(it => (it.fotos || []).forEach(f => { if (f && f.id) ids.push(f.id); }));
+      (os.croquis || []).forEach(c => { if (c && c.id) ids.push(c.id); });
+      (os.pranchas || []).forEach(v => (v.itens || []).forEach(p => { if (p && p.imagemId) ids.push(p.imagemId); }));
+    }
+    for (const fid of ids) {
+      if (naFila.has(fid)) continue;
+      naFila.add(fid);
+      try {
+        const f = await getFoto(fid);
+        if (f && f.base64) _enqueue({ action: 'putPhoto', fileId: fid, mime: f.mime });
+      } catch { /* sem a foto local não há o que subir */ }
     }
     agendarSync();
   }
@@ -768,7 +898,7 @@ const STORE = (() => {
     getUser, setUser, getInstalador, setInstalador, getLastSync,
     getUsuarioLembrado, setUsuarioLembrado,
     // Sync
-    trySync, pull, pullCFG,
+    trySync, pull, pullCFG, filaComErro,
     // Fotos
     pushPhoto, pullPhoto, putFoto, getFoto, delFoto, delFotoSync, compressImage, salvarFotoBase64,
     // Eventos

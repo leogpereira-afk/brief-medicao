@@ -408,6 +408,9 @@ STORE.onConflict((local, servidor) => {
 });
 
 STORE.on('quota', () => toast('Memória do aparelho cheia — briefings novos podem não estar sendo salvos. Sincronize e apague briefings antigos.', 'erro'));
+STORE.on('restauracao-servidor', (d) => {
+  toast((d && d.n) + ' briefing(s) do backup estavam mais novos no servidor e foram mantidos como estão lá.', 'sucesso');
+});
 STORE.on('item-descartado', (d) => {
   const cli = d && d.item && d.item.os && d.item.os.cliente ? ' de ' + d.item.os.cliente : '';
   toast('O briefing' + cli + ' não conseguiu subir pro design. Ele está marcado na lista com "NÃO SUBIU" — toque pra tentar de novo.', 'erro');
@@ -471,6 +474,10 @@ function conferirAcesso() {
     SESSAO = Object.assign({}, SESSAO, { papel: u.papel, nome: u.nome || SESSAO.nome });
     STORE.setUser(SESSAO);
     toast('Seu perfil agora é ' + u.papel + '.', 'sucesso');
+    // Sem redesenhar, um ex-admin continuava com o Painel aberto e funcional
+    // até trocar de tela (renderAdmin se auto-protege ao re-renderizar; e a
+    // promoção passa a mostrar o link do Painel na hora).
+    renderApp();
   }
 }
 
@@ -535,7 +542,12 @@ function podeCriar() { return SESSAO && (SESSAO.papel === 'vendedor' || SESSAO.p
 // Texto do botão de sincronização, a partir do estado atual.
 function rotuloSync(status, pendentes) {
   if (status === 'ok') return 'Sincronizado';
-  if (status === 'pending') return (pendentes || 0) + ' pendente(s)';
+  if (status === 'pending') {
+    // Item que já falhou várias vezes não pode se esconder atrás do rótulo de
+    // fila saudável: o vendedor precisa saber que tem algo precisando de ajuda.
+    const comErro = STORE.filaComErro();
+    return (pendentes || 0) + ' pendente(s)' + (comErro ? ' — ' + comErro + ' com erro' : '');
+  }
   // "Servidor fora" ≠ "Offline": o celular tem internet, quem não respondeu foi
   // o sistema. Mandar procurar sinal que já existe só gera ligação pro escritório.
   if (status === 'servidor') return 'Servidor fora';
@@ -1121,7 +1133,7 @@ function renderLayoutProducao(app) {
   if (osInput) osInput.onkeydown = e => { if (e.key === 'Enter') { e.preventDefault(); buscarOSProducao(); } };
   const lim = $('#pr-limpar-os');
   if (lim) lim.onclick = () => {
-    Object.assign(PROD, { os: null, osNumero: '', erroOS: '', cliente: '', contato: '', vendedor: '', endereco: '' });
+    Object.assign(PROD, { os: null, osNumero: '', erroOS: '', cliente: '', contato: '', vendedor: '', endereco: '', osPreenchida: '' });
     renderApp();
   };
   const busca = $('#pr-busca');
@@ -1145,6 +1157,15 @@ function renderLayoutProducao(app) {
   });
   const g = $('#pr-gerar');
   if (g) g.onclick = () => gerarLoteProducao();
+}
+
+// Buscou OUTRO número e não achou (ou caiu a conexão): o cabeçalho que está na
+// tela pertence à O.S. ANTERIOR -- deixá-lo ali fazia a prancha sair com o
+// cliente errado e o aviso "preencha à mão" mentia. Rebuscar a MESMA O.S.
+// preserva tudo, inclusive correção feita à mão.
+function limparCabecalhoSeTrocou(g, numero) {
+  if (!g.osPreenchida || g.osPreenchida === numero) return;
+  Object.assign(g, { cliente: '', contato: '', vendedor: '', endereco: '', osPreenchida: '' });
 }
 
 async function buscarOSProducao() {
@@ -1171,11 +1192,13 @@ async function buscarOSProducao() {
       toast('O.S. ' + numero + ' encontrada ✓', 'sucesso');
     } else {
       PROD.os = null;
+      limparCabecalhoSeTrocou(PROD, numero);
       PROD.erroOS = 'O.S. não encontrada' +
         (res && res.fontes && !res.fontes.mubisys && !res.fontes.pcp ? ' (integração ainda não configurada)' : '') +
         '. Preencha o cabeçalho à mão — a prancha sai igual.';
     }
   } catch {
+    limparCabecalhoSeTrocou(PROD, numero);
     PROD.erroOS = 'Sem conexão agora. Preencha o cabeçalho à mão — a prancha sai igual.';
   } finally {
     PROD.buscando = false;
@@ -1203,7 +1226,7 @@ async function gerarLoteProducao() {
     urgente: !!PROD.urgente, // o toggle do gerador vale pra todas as pranchas
     numero: i + 1, total
   }));
-  LOTE = { modo: 'producao', briefingId: b ? b.id : '', itens, cfg };
+  LOTE = { modo: 'producao', origem: 'gerador', briefingId: b ? b.id : '', itens, cfg };
   // A prévia mostra a ficha do setor, que vem do modelo em prancha.js.
   try { await ensureModelos(); } catch { /* sem ficha, o resto da prévia funciona */ }
   abrirPreviaLote();
@@ -1368,7 +1391,7 @@ function renderLayoutProjeto(app) {
   }
   const lim = $('#pj-limpar-os');
   if (lim) lim.onclick = () => {
-    Object.assign(PROJ, { os: null, osNumero: '', erroOS: '', cliente: '', contato: '', vendedor: '', endereco: '' });
+    Object.assign(PROJ, { os: null, osNumero: '', erroOS: '', cliente: '', contato: '', vendedor: '', endereco: '', osPreenchida: '' });
     renderApp();
   };
 
@@ -1415,11 +1438,13 @@ async function buscarOSProjeto() {
       toast('O.S. ' + numero + ' encontrada ✓', 'sucesso');
     } else {
       PROJ.os = null;
+      limparCabecalhoSeTrocou(PROJ, numero);
       PROJ.erroOS = 'O.S. não encontrada' +
         (res && res.fontes && !res.fontes.mubisys && !res.fontes.pcp ? ' (integração ainda não configurada)' : '') +
         '. Preencha o cabeçalho à mão — a prancha sai igual.';
     }
   } catch {
+    limparCabecalhoSeTrocou(PROJ, numero);
     PROJ.erroOS = 'Sem conexão agora. Preencha o cabeçalho à mão — a prancha sai igual.';
   } finally {
     PROJ.buscando = false;
@@ -1449,7 +1474,7 @@ async function gerarLoteProjeto(b) {
     urgente: !!base.urgente,
     numero: i + 1, total
   }));
-  LOTE = { modo: 'projeto', briefingId: b ? b.id : '', itens, cfg };
+  LOTE = { modo: 'projeto', origem: 'gerador', briefingId: b ? b.id : '', itens, cfg };
   try { await ensureModelos(); } catch { /* sem ficha, o resto da prévia funciona */ }
   abrirPreviaLote();
 }
@@ -1513,7 +1538,7 @@ function htmlFichaSetor(p, i) {
   return (
     soltas.map((rot, si) =>
       '<label class="linha-check solta">' +
-      '<input type="checkbox" data-solta="' + si + '" data-pi="' + i + '"' + (f.soltas[si] ? ' checked' : '') + '>' +
+      '<input type="checkbox" data-solta="' + si + '" data-srot="' + esc(rot) + '" data-pi="' + i + '"' + ((f.soltas['s:' + norm(rot)] !== undefined ? f.soltas['s:' + norm(rot)] : f.soltas[si]) ? ' checked' : '') + '>' +
       '<span class="rotulo-check">' + esc(rot) + '</span></label>').join('') +
     tabelas.map((tab, ti) =>
       '<div class="ficha-tabela">' +
@@ -1561,7 +1586,12 @@ function htmlFichaSetor(p, i) {
 // cada clique roubaria o foco de quem está digitando na coluna do lado.
 function ligarFicha(raiz, m) {
   $$('[data-solta]', raiz).forEach(cb => cb.onchange = () => {
-    fichaDe(LOTE.itens[Number(cb.dataset.pi)]).soltas[Number(cb.dataset.solta)] = cb.checked;
+    // Grava pela CHAVE do rótulo (não pela posição): reordenar/inserir caixa
+    // no admin trocava as marcas ao regerar prancha antiga. A marca antiga por
+    // índice é apagada junto (migração no primeiro toque).
+    const f = fichaDe(LOTE.itens[Number(cb.dataset.pi)]);
+    f.soltas['s:' + norm(cb.dataset.srot || '')] = cb.checked;
+    delete f.soltas[Number(cb.dataset.solta)];
   });
   $$('[data-marca]', raiz).forEach(cb => cb.onchange = () => {
     const [ti, li] = cb.dataset.marca.split('_').map(Number);
@@ -1808,9 +1838,18 @@ function abrirPreviaLote() {
         // continuava na tela e digitava OUTRA O.S. levava junto o cabeçalho
         // (cliente, contato, vendedor, endereço) e as artes do trabalho
         // anterior -- e a prancha saía com o nome do cliente errado.
-        PROD = Object.assign(prodVazio(), { _aberto: PROD._aberto });
-        PROJ = Object.assign(projVazio(), { _aberto: PROJ._aberto });
+        // SÓ o modo que gerou o lote: zerar os dois apagava o rascunho do outro
+        // modo, e o fluxo "Corrigir versão" (que não usa a mesa) apagava um
+        // rascunho em andamento sem aviso nenhum.
+        if (LOTE.origem === 'gerador') {
+          if (LOTE.modo === 'projeto') PROJ = Object.assign(projVazio(), { _aberto: PROJ._aberto });
+          else PROD = Object.assign(prodVazio(), { _aberto: PROD._aberto });
+        }
         m.remove(); // fechou só porque deu certo
+        // Redesenha sempre: a tela de layout nasce coerente com a mesa zerada
+        // (o botão "Montar pranchas" volta a viver) e o detalhe mostra a
+        // versão de prancha recém-gravada no histórico.
+        renderApp();
       } else { outros.forEach(b => b.disabled = false); btn.textContent = txt; }
     } catch (e) {
       outros.forEach(b => b.disabled = false); btn.textContent = txt;
@@ -1872,7 +1911,10 @@ async function exportarLote(separados) {
     await salvarLoteNoBriefing(lote);
   } catch (e) {
     console.error(e);
-    toast('PDF baixado, mas não consegui guardar no histórico do briefing', 'erro');
+    toast('PDF baixado, mas a versão NÃO foi guardada: ' + e.message + '. Libere espaço e exporte de novo.', 'erro');
+    // false = a prévia fica aberta com a ficha marcada; fechar aqui zerava a
+    // mesa e a ficha se perdia junto com a versão que não entrou no histórico.
+    return false;
   }
   return true;
 }
@@ -1935,7 +1977,9 @@ async function salvarLoteNoBriefing(loteRecebido) {
   });
   alvo.atualizadoEm = new Date().toISOString();
   alvo.atualizadoPor = SESSAO.nome;
-  STORE.saveOS(JSON.parse(JSON.stringify(alvo)));
+  if (!STORE.saveOS(JSON.parse(JSON.stringify(alvo)))) {
+    throw new Error('memória do aparelho cheia');
+  }
 }
 
 // Regera o PDF de uma versão já salva (busca as imagens pelo id)
@@ -2505,7 +2549,7 @@ function htmlEtapa4(cfg) {
   // esconder a etapa inteira faria o vendedor achar que perdeu o que já mediu.
   const falta = faltaCliente(BRIEF);
   const travado = falta.length > 0;
-  const prontos = BRIEF.itens.filter(itemCompleto).length;
+  const prontos = BRIEF.itens.filter(it => itemCompleto(it, cfg)).length;
   const concl = BRIEF.visitaConcluida;
   return (
     '<section class="etapa" data-etapa="4">' +
@@ -2584,7 +2628,7 @@ function htmlItem(item, idx, cfg) {
     '🗑<span class="rotulo-remover"> Remover</span></button></div>' +
 
     '<div class="corpo-item">' +
-    (item.origemOS ? '<div class="aviso indigo" style="margin-top:0">Veio da O.S. ' + esc(BRIEF.osNumero || '') + '. Confira as medidas no local.</div>' : '') +
+    (item.origemOS ? '<div class="aviso indigo" style="margin-top:0">Veio da O.S. ' + esc(item.osNum || BRIEF.osNumero || '') + '. Confira as medidas no local.</div>' : '') +
 
     '<div class="linha-2">' +
     '<div class="campo"><label>Nome do item <span class="obrig">*</span></label>' +
@@ -2693,6 +2737,7 @@ function itemDaOS(osItem, cfg) {
   if (achado) it.tipo = achado;
   else { it.tipo = 'Outro'; it.tipoOutro = desc.slice(0, 40) || 'Item da O.S.'; }
   it.detalheServico = desc;
+  it.osNum = osItem.osNum || ''; // de qual O.S. veio (o aviso usa isto)
   it.quantidade = String(osItem.qtde || '1').trim() || '1';
   const m = String(osItem.medidas || '').match(/([\d.,]+)\s*[xX×]\s*([\d.,]+)/);
   if (m) {
@@ -2887,7 +2932,14 @@ function ligarEditor(cfg) {
     const novo = osn.value.trim();
     // Mudou o número: o serviço da O.S. antiga não vale mais. Antes ele ficava
     // colado e saía errado na ficha e no PDF.
-    if (novo !== BRIEF.osNumero) { BRIEF.osServico = ''; BRIEF.osOrigem = ''; }
+    if (novo !== BRIEF.osNumero) {
+      BRIEF.osServico = ''; BRIEF.osOrigem = '';
+      // Os itens ainda não importados vieram da O.S. ANTERIOR: sob o número
+      // novo eles apareceriam misturados, pré-marcados pra importar. Os já
+      // importados ficam (viraram itens do briefing de verdade).
+      BRIEF.osItens = (BRIEF.osItens || []).filter(x => x.importado);
+      BRIEF.osItensDe = '';
+    }
     BRIEF.osNumero = novo;
     if (BRIEF.osNumero) BRIEF.semOS = false;
     salvarRascunho();
@@ -3269,13 +3321,19 @@ async function buscarOS(botao) {
       BRIEF.semOS = false;
       // Itens da O.S. ficam disponíveis pra trazer pro briefing na etapa 4
       const itensOS = Array.isArray(os.itens) ? os.itens : [];
+      // Buscou uma O.S. DIFERENTE da que trouxe os pendentes atuais? Eles são
+      // do trabalho anterior: só os já importados sobrevivem.
+      if (BRIEF.osItensDe && BRIEF.osItensDe !== numero) {
+        BRIEF.osItens = (BRIEF.osItens || []).filter(x => x.importado);
+      }
       if (itensOS.length) {
         const jaTem = new Set((BRIEF.osItens || []).map(x => x.descricao + '|' + x.medidas));
         BRIEF.osItens = (BRIEF.osItens || []).concat(
           itensOS.filter(x => !jaTem.has((x.descricao || '') + '|' + (x.medidas || '')))
-                 .map(x => ({ descricao: x.descricao || '', medidas: x.medidas || '', qtde: x.qtde || '1', importado: false }))
+                 .map(x => ({ descricao: x.descricao || '', medidas: x.medidas || '', qtde: x.qtde || '1', importado: false, osNum: numero }))
         );
       }
+      BRIEF.osItensDe = numero;
       salvarRascunho(true);
       toast(itensOS.length
         ? 'O.S. encontrada ✓ ' + itensOS.length + ' item(ns) prontos pra trazer na etapa 4'
@@ -3396,7 +3454,10 @@ function enviarBriefing() {
     BRIEF.status = BRIEF.tipoMedicao === 'Execução' ? 'Aprovado pra execução' : 'Aguardando orçamento';
     BRIEF.enviadoEm = new Date().toISOString();
     BRIEF.semOS = !String(BRIEF.osNumero || '').trim();
-    delete BRIEF.devolucao; // reenviou: o recado de correção não vale mais
+    // Reenviou: o recado de correção não vale mais. null, e não delete: o merge
+    // raso do pull só sobrescreve chave PRESENTE no remoto -- com delete, o
+    // recado ressuscitava nos outros aparelhos e se re-espalhava.
+    BRIEF.devolucao = null;
     // NÃO diz "enviado" se não conseguiu nem gravar no aparelho. Antes, com a
     // memória cheia, aparecia "enviado ✓" e o briefing sumia sem nunca subir.
     const gravou = salvarRascunho(true);
@@ -3695,7 +3756,7 @@ function renderDetalhe(app) {
         const imagem = p.imagemId ? await STORE.pullPhoto(p.imagemId) : null;
         itens.push(Object.assign({}, p, { id: STORE.uuid(), imagem, textoDireitos: cfg.textoDireitos || '' }));
       }
-      LOTE = { modo: v.modo || 'producao', briefingId: b.avulsa ? '' : b.id, itens, cfg };
+      LOTE = { modo: v.modo || 'producao', origem: 'correcao', briefingId: b.avulsa ? '' : b.id, itens, cfg };
       abrirPreviaLote();
     } catch (e) { toast('Não consegui abrir a versão: ' + e.message, 'erro'); }
   });
@@ -3782,6 +3843,11 @@ function abrirVincularOS(b) {
     toast(numero ? 'O.S. ' + numero + ' vinculada ✓' : 'Número removido', 'sucesso');
     renderApp();
   };
+  // O que a ÚLTIMA busca bem-sucedida achou. O Salvar compara com o número
+  // que está no campo NA HORA do clique: rebindar o onclick no sucesso deixava
+  // origem/serviço presos à busca antiga quando o usuário digitava outro
+  // número depois -- e a O.S. nova saía com o serviço da errada.
+  let achado = null;
   $('.btn-buscar', m).onclick = async () => {
     const numero = $('#v-numero', m).value.trim();
     const alvo = $('#v-resultado', m);
@@ -3791,15 +3857,20 @@ function abrirVincularOS(b) {
       const res = await STORE.apiFn('mubisys', { action: 'buscarOS', numero });
       if (res && res.encontrado) {
         alvo.innerHTML = '<div class="aviso verde">Achei: ' + esc(res.os.cliente || '') + (res.os.servico ? ' · ' + esc(res.os.servico) : '') + '</div>';
-        $('.btn-salvar', m).onclick = () => salvar(res.origem, res.os.servico || '');
+        achado = { numero, origem: res.origem, servico: res.os.servico || '' };
       } else {
+        if (achado && achado.numero !== numero) achado = null;
         alvo.innerHTML = '<div class="aviso amarelo">Não achei essa O.S. Dá pra salvar o número mesmo assim.</div>';
       }
     } catch {
       alvo.innerHTML = '<div class="aviso amarelo">Sem conexão. Dá pra salvar o número mesmo assim.</div>';
     }
   };
-  $('.btn-salvar', m).onclick = () => salvar('manual', '');
+  $('.btn-salvar', m).onclick = () => {
+    const n = $('#v-numero', m).value.trim();
+    if (achado && achado.numero === n) salvar(achado.origem, achado.servico);
+    else salvar('manual', '');
+  };
 }
 
 /* ══════════════════ Admin ══════════════════ */
@@ -4046,7 +4117,10 @@ async function salvarFichas(alvo) {
   // senhas, fichas, textos) mora num pacote só, e cada tela regrava o pacote
   // inteiro. Sem este passo, salvar as fichas com o painel aberto desde cedo
   // apagava quem tivesse sido cadastrado em outro aparelho no meio do dia.
-  await STORE.pullCFG();
+  if (!(await STORE.pullCFG())) {
+    toast('Não consegui conferir a config atual (sem conexão). Tente salvar de novo.', 'erro');
+    return;
+  }
   const cfg = STORE.getCFG();
   cfg.fichasSetores = mapa;
 
@@ -4126,7 +4200,10 @@ function adminUsuarios(alvo) {
       const senha = $('#u-senha', m).value;
       if (!nome || !usuario || (!u && !senha)) { toast('Preencha nome, usuário e senha', 'erro'); return; }
       // Config atual antes de gravar (o pacote é único e esta tela regrava tudo).
-      await STORE.pullCFG();
+      if (!(await STORE.pullCFG())) {
+        toast('Não consegui conferir a equipe atual (sem conexão). Tente salvar de novo.', 'erro');
+        return;
+      }
       const cfg2 = STORE.getCFG();
       cfg2.usuarios = cfg2.usuarios || [];
       const adminsAtivos = cfg2.usuarios.filter(x => x.papel === 'admin' && x.ativo !== false);
@@ -4244,10 +4321,12 @@ function adminArquivos(alvo) {
       const aviso = 'Isto vai <b>substituir os ' + atuais + ' briefing(s)</b> deste aparelho pelos ' +
         dados.os.length + ' do arquivo' +
         (naFila ? ' e <b>descartar ' + naFila + ' item(ns) que ainda não subiram</b>' : '') +
-        '. Não dá pra desfazer.';
-      confirmar('Substituir tudo por este backup?', aviso, 'Substituir', () => {
+        '. Não dá pra desfazer.' +
+        '<br><br>O arquivo <b>não contém fotos</b>: só sobem as que existirem neste aparelho. ' +
+        'Briefings mais novos no servidor são mantidos lá (o arquivo não desfaz o trabalho da equipe).';
+      confirmar('Substituir tudo por este backup?', aviso, 'Substituir', async () => {
         try {
-          STORE.importarBackup(dados);
+          await STORE.importarBackup(dados);
           toast('Backup importado ✓ (' + dados.os.length + ' briefings) — subindo pro servidor…', 'sucesso');
           renderApp();
         } catch (err) { toast('Não consegui importar: ' + err.message, 'erro'); }
@@ -4368,7 +4447,10 @@ function adminConfig(alvo) {
     // Mesma razão do editor de fichas: a config é um pacote só e esta tela
     // regrava o pacote inteiro. Busca o atual antes pra não apagar o que outro
     // aparelho cadastrou enquanto esta tela estava aberta.
-    await STORE.pullCFG();
+    if (!(await STORE.pullCFG())) {
+      toast('Não consegui conferir a config atual (sem conexão). Tente salvar de novo.', 'erro');
+      return;
+    }
     const cfg2 = STORE.getCFG();
     cfg2.dicas = cfg2.dicas || {};
     $$('[data-dica]', alvo).forEach(t => { cfg2.dicas[t.dataset.dica] = t.value.trim(); });

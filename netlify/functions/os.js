@@ -191,9 +191,13 @@ exports.handler = async (event, context) => {
 
         const existing = await store.get(os.id, { type: 'json' }).catch(() => null);
         if (existing && existing.atualizadoEm && os.atualizadoEm) {
-          const tsServer = new Date(existing.atualizadoEm).getTime();
-          const tsClient = new Date(os.atualizadoEm).getTime();
-          if (tsServer > tsClient) {
+          // Versão-base (espelho da Edge Function brief-sync, o backend vivo):
+          // o cliente manda o atualizadoEm que conhecia; divergiu = conflito.
+          if (typeof body.baseAtualizadoEm === 'string' || body.baseAtualizadoEm === null) {
+            if (body.baseAtualizadoEm !== existing.atualizadoEm) {
+              return resp({ conflito: true, servidor: existing });
+            }
+          } else if (new Date(existing.atualizadoEm).getTime() > new Date(os.atualizadoEm).getTime()) {
             return resp({ conflito: true, servidor: existing });
           }
         }
@@ -222,9 +226,12 @@ exports.handler = async (event, context) => {
         // em caso de falha de log/webhook.
         const quem = toSave.atualizadoPor || 'app';
         const base = { briefingId: toSave.id, numero: toSave.numeroBrief || null, cliente: toSave.cliente || '' };
-        // Avulso nunca conta como briefing enviado (não avisa o designer à toa)
-        const foiEnviado = !toSave.avulsa && toSave.situacao === 'enviado' &&
-          (!existing || existing.situacao !== 'enviado');
+        // Avulso nunca conta como briefing enviado (não avisa o designer à toa).
+        // Restauração de backup (origem:'import') e briefing na lixeira também
+        // não: importar um arquivo em servidor vazio disparava o webhook
+        // "briefing_enviado" pra cada briefing enviado do arquivo.
+        const foiEnviado = body.origem !== 'import' && !toSave.avulsa && !toSave.apagadoEm &&
+          toSave.situacao === 'enviado' && (!existing || existing.situacao !== 'enviado');
         if (!existing) {
           await registrarLog({ quem, acao: toSave.avulsa ? 'criou prancha avulsa' : 'criou o briefing', ...base });
         } else if (toSave.apagadoEm && !existing.apagadoEm) {

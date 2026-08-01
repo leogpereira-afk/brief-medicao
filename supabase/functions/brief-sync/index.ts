@@ -299,7 +299,17 @@ Deno.serve(async (req: Request) => {
 
         const existing = await getReg("os", os.id);
         if (existing?.atualizadoEm && os.atualizadoEm) {
-          if (new Date(existing.atualizadoEm).getTime() > new Date(os.atualizadoEm).getTime()) {
+          // Versão-base: o cliente manda o atualizadoEm que ele CONHECIA antes
+          // de editar. Se o servidor já tem outra versão, alguém editou no
+          // meio -> conflito, mesmo que o carimbo do cliente seja mais novo.
+          // (Antes só "servidor mais novo que cliente" disparava; a edição
+          // alheia do último minuto era sobrescrita em silêncio.)
+          if (typeof body.baseAtualizadoEm === "string" || body.baseAtualizadoEm === null) {
+            if (body.baseAtualizadoEm !== existing.atualizadoEm) {
+              return resp({ conflito: true, servidor: existing });
+            }
+          } else if (new Date(existing.atualizadoEm).getTime() > new Date(os.atualizadoEm).getTime()) {
+            // Cliente antigo (sem versão-base): critério antigo, retrocompatível.
             return resp({ conflito: true, servidor: existing });
           }
         }
@@ -312,8 +322,19 @@ Deno.serve(async (req: Request) => {
 
         const quem = toSave.atualizadoPor || "app";
         const base = { briefingId: toSave.id, numero: toSave.numeroBrief ?? null, cliente: toSave.cliente ?? "" };
-        const foiEnviado = !toSave.avulsa && toSave.situacao === "enviado" && (!existing || existing.situacao !== "enviado");
-        if (!existing) {
+        // Restauração de backup NÃO é atividade nova: sem esta guarda, importar
+        // um arquivo num servidor vazio disparava o webhook "briefing_enviado"
+        // (e a linha "enviou pro design") pra CADA briefing enviado do arquivo.
+        const restauracao = body.origem === "import";
+        const foiEnviado = !restauracao && !toSave.avulsa && !toSave.apagadoEm &&
+          toSave.situacao === "enviado" && (!existing || existing.situacao !== "enviado");
+        // Upsert que não mudou nada além do carimbo (retry da fila, backup
+        // idêntico) não vira linha de log.
+        const semCarimbo = (o: any) => JSON.stringify({ ...o, atualizadoEm: 0, atualizadoPor: 0 });
+        const igual = existing && semCarimbo(existing) === semCarimbo(toSave);
+        if (restauracao) {
+          if (!existing) await registrarLog({ quem, acao: "restaurou do backup", ...base });
+        } else if (!existing) {
           await registrarLog({ quem, acao: toSave.avulsa ? "criou prancha avulsa" : "criou o briefing", ...base });
         } else if (toSave.apagadoEm && !existing.apagadoEm) {
           await registrarLog({ quem, acao: "moveu pra lixeira", ...base });
@@ -323,8 +344,15 @@ Deno.serve(async (req: Request) => {
           await registrarLog({ quem, acao: "enviou pro design", ...base });
         } else if (existing.status !== toSave.status && toSave.status) {
           await registrarLog({ quem, acao: "mudou status: " + (existing.status || "sem status") + " para " + toSave.status, ...base });
-        } else if (existing.situacao === "enviado") {
-          await registrarLog({ quem, acao: "editou o briefing", ...base });
+        } else if (existing.situacao === "enviado" && !igual) {
+          // Coalesce: o autosave grava a cada 2,5s -- sem isto, uma sessão de
+          // edição num briefing enviado afogava a tela de atividade.
+          const { data: ult } = await sb.from("brief_registros").select("registro").eq("colecao", "log")
+            .order("id", { ascending: false }).limit(30);
+          const rec = (ult ?? []).map((r: any) => r.registro).find((l: any) =>
+            l && l.briefingId === toSave.id && l.quem === quem && l.acao === "editou o briefing");
+          const ha10min = rec && rec.em && (Date.now() - new Date(rec.em).getTime()) < 10 * 60 * 1000;
+          if (!ha10min) await registrarLog({ quem, acao: "editou o briefing", ...base });
         }
 
         if (foiEnviado) {

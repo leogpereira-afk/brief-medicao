@@ -154,42 +154,46 @@ const PDF = (() => {
     const cols = colunas || 2;
     const gap = 10;
     const largFoto = (LARG - gap * (cols - 1)) / cols;
-    let col = 0, linhaAltura = 0;
     const MAX_H = alturaMax || 220;
-    for (const f of fotos) {
-      const b64 = f.arquivada ? null : await STORE.pullPhoto(f.id);
-      // Mantém a PROPORÇÃO da foto. Antes a altura era limitada a 220 mas a
-      // largura continuava cheia: tudo que foi fotografado em pé (o normal no
-      // celular) saía achatado, e a foto de "referência de escala" mentia a
-      // proporção. Agora encolhe a largura junto e centraliza na coluna.
-      let wFoto = largFoto, hFoto = largFoto * 0.72;
-      if (b64) {
-        const dims = await medirImagem(b64);
-        if (dims && dims.w > 0) {
-          const prop = dims.h / dims.w;
-          hFoto = largFoto * prop;
-          if (hFoto > MAX_H) { hFoto = MAX_H; wFoto = MAX_H / prop; }
+    // Processa por LINHA: mede TODAS as fotos da linha antes de desenhar e
+    // reserva a altura da MAIS ALTA. Garantir espaço só pela 1ª foto deixava
+    // uma foto em pé na 2ª coluna sair da página quando a 1ª era deitada.
+    for (let li = 0; li < fotos.length; li += cols) {
+      const grupo = fotos.slice(li, li + cols);
+      const medidos = [];
+      for (const f of grupo) {
+        const b64 = f.arquivada ? null : await STORE.pullPhoto(f.id);
+        // Mantém a PROPORÇÃO da foto: encolhe a largura junto com a altura e
+        // centraliza na coluna (foto em pé não sai achatada).
+        let wFoto = largFoto, hFoto = largFoto * 0.72;
+        if (b64) {
+          const dims = await medirImagem(b64);
+          if (dims && dims.w > 0) {
+            const prop = dims.h / dims.w;
+            hFoto = largFoto * prop;
+            if (hFoto > MAX_H) { hFoto = MAX_H; wFoto = MAX_H / prop; }
+          }
         }
+        medidos.push({ f, b64, wFoto, hFoto, blocoH: hFoto + (f.legenda ? 14 : 4) });
       }
-      const blocoH = hFoto + (f.legenda ? 14 : 4);
-      if (col === 0) c.garantir(blocoH + 6);
-      const x = M + col * (largFoto + gap);
-      const xFoto = x + (largFoto - wFoto) / 2; // centraliza quando é mais estreita
-      if (b64) {
-        try { doc.addImage(b64, 'JPEG', xFoto, c.y, wFoto, hFoto, undefined, 'FAST'); }
-        catch { desenharFotoFaltando(doc, xFoto, c.y, wFoto, hFoto); }
-      } else {
-        desenharFotoFaltando(doc, xFoto, c.y, wFoto, hFoto, f.arquivada);
-      }
-      if (f.legenda) {
-        doc.setFont('Poppins', 'normal'); doc.setFontSize(7); doc.setTextColor(...CINZA);
-        doc.text(String(f.legenda), x, c.y + hFoto + 10);
-      }
-      linhaAltura = Math.max(linhaAltura, blocoH);
-      col++;
-      if (col >= cols) { col = 0; c.y += linhaAltura + 8; linhaAltura = 0; }
+      const linhaAltura = Math.max(...medidos.map(m => m.blocoH));
+      c.garantir(linhaAltura + 6);
+      medidos.forEach((mF, col) => {
+        const x = M + col * (largFoto + gap);
+        const xFoto = x + (largFoto - mF.wFoto) / 2; // centraliza quando é mais estreita
+        if (mF.b64) {
+          try { doc.addImage(mF.b64, 'JPEG', xFoto, c.y, mF.wFoto, mF.hFoto, undefined, 'FAST'); }
+          catch { desenharFotoFaltando(doc, xFoto, c.y, mF.wFoto, mF.hFoto); }
+        } else {
+          desenharFotoFaltando(doc, xFoto, c.y, mF.wFoto, mF.hFoto, mF.f.arquivada);
+        }
+        if (mF.f.legenda) {
+          doc.setFont('Poppins', 'normal'); doc.setFontSize(7); doc.setTextColor(...CINZA);
+          doc.text(String(mF.f.legenda), x, c.y + mF.hFoto + 10);
+        }
+      });
+      c.y += linhaAltura + 8;
     }
-    if (col > 0) c.y += linhaAltura + 8;
   }
 
   function desenharFotoFaltando(doc, x, y, w, h, arquivada) {
