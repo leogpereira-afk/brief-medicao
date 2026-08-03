@@ -31,8 +31,12 @@ function esc(s) {
     .replace(/"/g, '&quot;').replace(/'/g, '&#39;');
 }
 
+// Mesma regra do servidor (equipe-auth): sem acento, minúsculo, espaço
+// colapsado. O login agora vem normalizado de lá — se aqui divergir, "meus
+// briefings" para de reconhecer o dono.
 function norm(s) {
-  return String(s || '').toLowerCase().normalize('NFD').replace(/[̀-ͯ]/g, '');
+  return String(s || '').toLowerCase().normalize('NFD').replace(/[̀-ͯ]/g, '')
+    .replace(/\s+/g, ' ').trim();
 }
 
 function pad2(n) { return String(n).padStart(2, '0'); }
@@ -463,7 +467,7 @@ function conferirAcesso() {
   if (!equipe.length) return; // sem lista baixada não dá pra concluir nada
   const u = equipe.find(x => norm(x.usuario) === norm(SESSAO.usuario));
   if (!u || u.ativo === false) {
-    STORE.setUser(null); SESSAO = null; zerarEstadoDeTela();
+    STORE.setUser(null); AUTH.esquecer(); SESSAO = null; zerarEstadoDeTela();
     location.hash = '#/login';
     toast(u ? 'Seu acesso foi desativado pelo administrador.' : 'Seu usuário não está mais na equipe.', 'erro');
     return;
@@ -523,6 +527,7 @@ function lerRota() {
   // Porta de entrada: escolhe Comercial ou Designer antes de qualquer login
   if (h === '' || h === 'inicio') { ROTA = { nome: 'inicio' }; return; }
   if (partes[0] === 'entrar') { ROTA = { nome: 'login', area: partes[1] || 'comercial' }; return; }
+  if (h === 'trocar-senha') { ROTA = { nome: 'senha' }; return; }
   if (!SESSAO) { ROTA = { nome: 'inicio' }; return; }
   if (h === 'lista') ROTA = { nome: 'lista' };
   else if (h === 'login') ROTA = { nome: 'login', area: 'comercial' };
@@ -694,7 +699,7 @@ function sairDaConta() {
   $('.btn-cancelar', m).onclick = () => m.remove();
   $('.btn-sair', m).onclick = () => {
     m.remove();
-    STORE.setUser(null); SESSAO = null;
+    STORE.setUser(null); AUTH.esquecer(); SESSAO = null;
     zerarEstadoDeTela();
     location.hash = '#/login';
   };
@@ -725,6 +730,9 @@ function renderApp() {
   const app = $('#app');
   flushSalvar(); // nunca redesenhar por cima de digitação ainda não gravada
   if (!SESSAO && ROTA.nome !== 'login' && ROTA.nome !== 'inicio') { location.hash = '#/'; return; }
+  // Senha temporária é obrigação, não sugestão: fechar e reabrir o app não pode
+  // servir de desvio. A trava mora aqui, não no redirecionamento do login.
+  if (SESSAO && SESSAO.trocarSenha && ROTA.nome !== 'senha') { location.hash = '#/trocar-senha'; return; }
   // Saiu do painel de controle: o rascunho do editor de fichas não vale mais
   // (ao voltar, a aba relê o que está salvo).
   if (ROTA.nome !== 'admin') _fichasAbaViva = false;
@@ -733,6 +741,7 @@ function renderApp() {
     case 'layout': return renderLayout(app);
     case 'arquivos': return renderArquivos(app);
     case 'login': return renderLogin(app);
+    case 'senha': return renderTrocarSenha(app);
     case 'novo': return criarNovo();
     case 'editor': return renderEditor(app);
     case 'detalhe': return renderDetalhe(app);
@@ -782,7 +791,7 @@ function renderInicio(app) {
   const sair = $('#ini-sair');
   if (sair) sair.onclick = e => {
     e.preventDefault();
-    STORE.setUser(null); SESSAO = null; zerarEstadoDeTela(); renderApp();
+    STORE.setUser(null); AUTH.esquecer(); SESSAO = null; zerarEstadoDeTela(); renderApp();
   };
 }
 
@@ -818,45 +827,101 @@ function renderLogin(app) {
     '<div id="lg-erro"></div>' +
     '<button class="botao largo" id="lg-entrar">Entrar</button>' +
     '<a href="#/" class="voltar-inicio">← voltar</a>' +
-    '<p class="dica-campo" style="text-align:center; margin-top:12px">Primeiro acesso neste aparelho precisa de internet.</p>' +
+    '<p class="dica-campo" style="text-align:center; margin-top:12px">Entrar precisa de internet. Depois de entrar, o app funciona offline.</p>' +
     '</div></div>';
   let lembrar = true;
   $('#lg-lembrar').onclick = () => { lembrar = !lembrar; $('#lg-lembrar').classList.toggle('marcado', lembrar); };
+  const erroLogin = html => { const el = $('#lg-erro'); if (el) el.innerHTML = '<div class="aviso vermelho">' + html + '</div>'; };
+  let entrando = false;
   const entrar = async () => {
+    // Enter não olha para o botão desabilitado: na rua, com rede lenta, o
+    // vendedor apertava duas vezes e saíam dois logins.
+    if (entrando) return;
     const usuario = $('#lg-usuario').value.trim();
     const senha = $('#lg-senha').value;
-    let cfg = STORE.getCFG();
-    if (!(cfg.usuarios || []).length && navigator.onLine) { await STORE.pullCFG(); cfg = STORE.getCFG(); }
-    // Sem lista de usuários no aparelho, o problema NÃO é a senha: é que este
-    // celular nunca baixou a equipe. Dizer "senha incorreta" fazia o vendedor
-    // na rua achar que a conta tinha sido cancelada.
-    if (!(cfg.usuarios || []).length) {
-      $('#lg-erro').innerHTML = '<div class="aviso vermelho">Este aparelho ainda não baixou a lista da equipe. ' +
-        'Conecte na internet uma vez e entre de novo — depois disso funciona offline.</div>';
+    if (!usuario || !senha) { erroLogin('Preencha usuário e senha.'); return; }
+    entrando = true;
+    const bt = $('#lg-entrar');
+    bt.disabled = true; bt.textContent = 'Entrando…';
+    let r;
+    try {
+      // A conferência acontece no servidor. A senha não mora mais no pacote de
+      // configuração que todo aparelho baixa — era assim que ela vazava.
+      r = await AUTH.login(usuario, senha);
+    } catch (e) {
+      entrando = false; bt.disabled = false; bt.textContent = 'Entrar';
+      if (e.status === 401 || e.status === 403) { erroLogin(esc(e.erro || 'Usuário ou senha incorretos.')); return; }
+      erroLogin('Não consegui falar com o servidor. <b>Entrar precisa de internet</b> — ' +
+        'depois de entrar, o app trabalha offline normalmente.');
       return;
     }
-    const u = (cfg.usuarios || []).find(x => norm(x.usuario) === norm(usuario));
-    if (!u || String(u.senha) !== senha) {
-      $('#lg-erro').innerHTML = '<div class="aviso vermelho">Usuário ou senha incorretos.</div>';
+    entrando = false; bt.disabled = false; bt.textContent = 'Entrar';
+    if (!def.papeis.includes(r.papel)) {
+      AUTH.esquecer();
+      erroLogin('O usuário <b>' + esc(r.usuario) + '</b> é ' + esc(r.papel) +
+        ' e não abre a área ' + esc(def.rotulo) + '.');
       return;
     }
-    if (u.ativo === false) {
-      $('#lg-erro').innerHTML = '<div class="aviso vermelho">Este usuário está desativado. Fale com o admin.</div>';
-      return;
-    }
-    if (!def.papeis.includes(u.papel)) {
-      $('#lg-erro').innerHTML = '<div class="aviso vermelho">O usuário <b>' + esc(u.usuario) +
-        '</b> é ' + esc(u.papel) + ' e não abre a área ' + esc(def.rotulo) + '.</div>';
-      return;
-    }
-    STORE.setUser({ usuario: u.usuario, nome: u.nome, papel: u.papel });
-    STORE.setUsuarioLembrado(lembrar ? u.usuario : '');
+    STORE.setUser({ usuario: r.usuario, nome: r.nome, papel: r.papel, trocarSenha: !!r.trocarSenha });
+    STORE.setUsuarioLembrado(lembrar ? r.usuario : '');
     SESSAO = STORE.getUser();
     zerarEstadoDeTela(); // entra limpo: nada do usuário anterior atravessa
+    // Senha criada por outra pessoa: a primeira coisa é trocar.
+    if (r.trocarSenha) { location.hash = '#/trocar-senha'; return; }
     location.hash = def.destino;
   };
   $('#lg-entrar').onclick = entrar;
   $('#lg-senha').addEventListener('keydown', e => { if (e.key === 'Enter') entrar(); });
+}
+
+/* ══════════════════ Trocar a senha ══════════════════ */
+
+// Senha criada por outra pessoa (gestão ou Central) nasce TEMPORÁRIA: a pessoa
+// é obrigada a trocar antes de usar o app. Assim ninguém segue trabalhando com
+// uma senha que um terceiro conhece.
+function renderTrocarSenha(app) {
+  const obrigado = !!(SESSAO && SESSAO.trocarSenha);
+  document.title = 'Trocar a senha';
+  app.innerHTML =
+    '<div class="tela-login"><div class="cartao-login">' +
+    '<img class="logo" src="logo-impresilk.png" alt="Impresilk">' +
+    '<h1>' + (obrigado ? 'Crie a sua senha' : 'Trocar a senha') + '</h1>' +
+    '<div class="sub">' + (obrigado
+      ? 'A senha atual foi criada por outra pessoa. Escolha a sua para continuar.'
+      : esc((SESSAO && SESSAO.nome) || '')) + '</div>' +
+    (obrigado ? '' : '<div class="campo"><label>Senha atual</label><input id="sn-atual" type="password" autocomplete="current-password"></div>') +
+    '<div class="campo"><label>Senha nova (mínimo 6)</label><input id="sn-nova" type="password" autocomplete="new-password"></div>' +
+    '<div class="campo"><label>Repita a senha nova</label><input id="sn-rep" type="password" autocomplete="new-password"></div>' +
+    '<div id="sn-erro"></div>' +
+    '<button class="botao largo" id="sn-salvar">Salvar</button>' +
+    (obrigado
+      ? '<button class="botao fantasma largo" id="sn-outro" style="margin-top:10px">Entrar com outro usuário</button>'
+      : '<a href="#/lista" class="voltar-inicio">← voltar</a>') +
+    '</div></div>';
+  // Sem esta saída, quem caísse aqui sem saber a senha ficava preso na tela.
+  const outro = $('#sn-outro');
+  if (outro) outro.onclick = () => {
+    AUTH.esquecer(); STORE.setUser(null); SESSAO = null; location.hash = '#/';
+  };
+  const erro = html => { $('#sn-erro').innerHTML = '<div class="aviso vermelho">' + html + '</div>'; };
+  $('#sn-salvar').onclick = async () => {
+    const atual = obrigado ? '' : ($('#sn-atual').value || '');
+    const nova = $('#sn-nova').value || '';
+    if (nova.length < 6) { erro('A senha nova precisa de ao menos 6 caracteres.'); return; }
+    if (nova !== ($('#sn-rep').value || '')) { erro('As duas senhas novas não são iguais.'); return; }
+    const bt = $('#sn-salvar'); bt.disabled = true; bt.textContent = 'Salvando…';
+    try {
+      await AUTH.trocarMinhaSenha(atual, nova);
+    } catch (e) {
+      bt.disabled = false; bt.textContent = 'Salvar';
+      erro(esc(e.erro || 'Não consegui trocar a senha agora. Tente de novo com internet.'));
+      return;
+    }
+    STORE.setUser(Object.assign({}, SESSAO, { trocarSenha: false }));
+    SESSAO = STORE.getUser();
+    toast('Senha trocada ✓', 'sucesso');
+    location.hash = '#/lista';
+  };
 }
 
 /* ══════════════════ Gerador de layout (pranchas) ══════════════════ */
@@ -2184,7 +2249,7 @@ function visiveisPraSessao() {
   // são briefings: ficam fora desta lista.
   let lista = STORE.getAllOS().filter(b => b && !b.apagadoEm && !b.avulsa);
   if (SESSAO.papel === 'vendedor') {
-    lista = lista.filter(b => b.vendedorUsuario === SESSAO.usuario || b.criadoPor === SESSAO.nome);
+    lista = lista.filter(b => norm(b.vendedorUsuario) === norm(SESSAO.usuario) || b.criadoPor === SESSAO.nome);
   } else if (SESSAO.papel === 'designer') {
     lista = lista.filter(b => b.situacao === 'enviado');
   }
@@ -2210,7 +2275,7 @@ function filtrarLista(lista) {
     if (FILTROS.tipo && b.tipoMedicao !== FILTROS.tipo) return false;
     if (FILTROS.semOS && String(b.osNumero || '').trim()) return false;
     // "Só os meus": o designer vê o que foi direcionado pra ele
-    if (FILTROS.meus && !(b.designerAtribuido && b.designerAtribuido.usuario === SESSAO.usuario)) return false;
+    if (FILTROS.meus && !(b.designerAtribuido && norm(b.designerAtribuido.usuario) === norm(SESSAO.usuario))) return false;
     return true;
   });
 }
@@ -2358,7 +2423,7 @@ function ligarCards() {
         if (typeof _refreshCards === 'function') _refreshCards(); // tira o selo na hora
         return;
       }
-      const meu = b.vendedorUsuario === SESSAO.usuario;
+      const meu = norm(b.vendedorUsuario) === norm(SESSAO.usuario);
       if (b.situacao !== 'enviado' && (meu || SESSAO.papel === 'admin')) location.hash = '#/editar/' + id;
       else location.hash = '#/b/' + id;
     };
@@ -3390,9 +3455,12 @@ function abrirConcluirVisita() {
 }
 
 // Designers ativos do time (a lista de usuários sincroniza no CFG).
+// A chave é o LOGIN, não o id: quem é cadastrado pela tela nova pode não ter id,
+// e aí sumia da lista de atribuição sem ninguém entender por quê.
 function designersAtivos() {
   return ((STORE.getCFG() || {}).usuarios || [])
-    .filter(u => u.papel === 'designer' && u.ativo !== false);
+    .filter(u => u.papel === 'designer' && u.ativo !== false)
+    .map(u => ({ ...u, id: u.id || u.usuario }));
 }
 
 // Grava a atribuição no briefing, com o rastro de quem passou pra quem.
@@ -3515,7 +3583,7 @@ function renderDetalhe(app) {
   if (!b) { toast('Briefing não encontrado neste aparelho. Sincronize e tente de novo.', 'erro'); location.hash = '#/lista'; return; }
   document.title = (b.cliente || 'Briefing') + ' · Brief de Medição';
   const podeGerir = SESSAO.papel === 'designer' || SESSAO.papel === 'admin';
-  const meu = b.vendedorUsuario === SESSAO.usuario;
+  const meu = norm(b.vendedorUsuario) === norm(SESSAO.usuario);
   const semOS = !String(b.osNumero || '').trim();
   const o = b.obsGerais || {};
   // Arquivos e PDF do briefing só depois da visita concluída. Briefing já
@@ -3575,7 +3643,7 @@ function renderDetalhe(app) {
       ? '<div class="aviso ' + (b.designerAtribuido ? 'indigo' : 'amarelo') + '" style="margin-top:12px; display:flex; align-items:center; gap:10px; flex-wrap:wrap">' +
         '<span>🎨 ' + (b.designerAtribuido
           ? 'Com <b>' + esc(b.designerAtribuido.nome) + '</b>' +
-            (SESSAO.usuario && b.designerAtribuido.usuario === SESSAO.usuario ? ' (você)' : '')
+            (SESSAO.usuario && norm(b.designerAtribuido.usuario) === norm(SESSAO.usuario) ? ' (você)' : '')
           : 'Sem designer definido — qualquer um do design pega') + '</span>' +
         (podeGerir ? '<button class="botao mini suave" id="btn-repassar">' +
           (b.designerAtribuido ? 'Direcionar pra outro' : 'Assumir ou direcionar') + '</button>' : '') +
@@ -4153,17 +4221,50 @@ async function salvarFichas(alvo) {
   adminFichas(alvo);
 }
 
-function adminUsuarios(alvo) {
-  const cfg = STORE.getCFG();
-  const usuarios = cfg.usuarios || [];
+// Tela de "entre de novo" — usada quando o aparelho não tem crachá (sessão
+// antiga) ou o crachá venceu. Sem isto o app dava um erro que não ajudava.
+function avisoEntrarDeNovo(alvo, motivo) {
+  alvo.innerHTML = '<div class="card"><div class="sub-secao">Equipe</div>' +
+    '<div class="aviso">' + esc(motivo) + ' Para administrar os acessos, entre de novo — ' +
+    'leva dez segundos e não apaga nada deste aparelho.</div>' +
+    '<button class="botao" id="btn-reentrar">Entrar de novo</button></div>';
+  const b = $('#btn-reentrar', alvo);
+  if (b) b.onclick = () => {
+    AUTH.esquecer(); STORE.setUser(null); SESSAO = null;
+    location.hash = '#/entrar/admin';
+  };
+}
+
+async function adminUsuarios(alvo) {
+  // Sessão de antes da virada não tem crachá: pedir para entrar de novo é a
+  // resposta honesta — dizer "apenas a gestão" para o próprio dono não é.
+  if (!AUTH.temCracha()) { avisoEntrarDeNovo(alvo, 'Sua sessão é anterior ao login novo.'); return; }
+  alvo.innerHTML = '<div class="card"><div class="sub-secao">Equipe</div><p class="dica-campo">Carregando…</p></div>';
+  let usuarios = [], papeisOk = ['vendedor', 'designer', 'admin'];
+  try {
+    const r = await AUTH.listarContas();
+    usuarios = r.contas || [];
+    if (r.papeis && r.papeis.length) papeisOk = r.papeis;
+  } catch (e) {
+    if (e.status === 401 || e.status === 403) { avisoEntrarDeNovo(alvo, 'Sua sessão expirou.'); return; }
+    alvo.innerHTML = '<div class="card"><div class="sub-secao">Equipe</div>' +
+      '<div class="aviso vermelho">Não consegui ler a equipe: ' + esc(e.erro || e.message) + '</div>' +
+      '<p class="dica-campo">Esta tela precisa de internet — os acessos moram no servidor.</p></div>';
+    return;
+  }
   alvo.innerHTML =
     '<div class="card"><div class="sub-secao">Equipe (' + usuarios.length + ')</div>' +
     '<table class="tabela"><tr><th>Nome</th><th>Usuário</th><th>Perfil</th><th>Situação</th><th></th></tr>' +
     usuarios.map((u, i) =>
       '<tr><td>' + esc(u.nome) + '</td><td>' + esc(u.usuario) + '</td><td>' + esc(u.papel) + '</td>' +
-      '<td>' + (u.ativo === false ? '<span class="badge rascunho">desativado</span>' : '<span class="badge status-concluido">ativo</span>') + '</td>' +
-      '<td style="white-space:nowrap"><button class="botao mini suave" data-editar="' + i + '">Editar</button></td></tr>'
+      '<td>' + (u.ativo === false ? '<span class="badge rascunho">desativado</span>'
+        : u.trocarSenha ? '<span class="badge rascunho">senha temporária</span>'
+        : '<span class="badge status-concluido">ativo</span>') + '</td>' +
+      '<td style="white-space:nowrap"><button class="botao mini suave" data-editar="' + i + '">Editar</button>' +
+      '<button class="botao mini suave" data-remover="' + i + '" style="margin-left:6px">Remover</button></td></tr>'
     ).join('') + '</table>' +
+    '<p class="dica-campo" style="margin-top:10px">A senha fica no servidor, embaralhada — nem eu nem você conseguimos lê-la. ' +
+    'Senha que você cria para outra pessoa é temporária: ela troca na primeira entrada.</p>' +
     '<button class="botao" id="btn-novo-usuario" style="margin-top:12px">➕ Novo usuário</button></div>';
 
   const formUsuario = (u, idx) => {
@@ -4172,7 +4273,7 @@ function adminUsuarios(alvo) {
       '<div class="campo"><label>Nome</label><input id="u-nome" value="' + esc(u ? u.nome : '') + '"></div>' +
       '<div class="campo"><label>Usuário (login)</label><input id="u-usuario" autocapitalize="none" value="' + esc(u ? u.usuario : '') + '"' + (u ? ' disabled' : '') + '></div>' +
       '<div class="campo"><label>Perfil</label><select id="u-papel">' +
-      ['vendedor', 'designer', 'admin'].map(p => '<option ' + (u && u.papel === p ? 'selected' : '') + '>' + p + '</option>').join('') + '</select></div>' +
+      papeisOk.map(p => '<option ' + (u && u.papel === p ? 'selected' : '') + '>' + p + '</option>').join('') + '</select></div>' +
       // Senha mascarada, com botão pra mostrar. Antes saía em texto puro na
       // tela do admin -- quem passasse atrás lia a senha da equipe inteira.
       '<div class="campo"><label>' + (u ? 'Nova senha (deixe em branco pra manter)' : 'Senha') + '</label>' +
@@ -4199,30 +4300,30 @@ function adminUsuarios(alvo) {
       const papel = $('#u-papel', m).value;
       const senha = $('#u-senha', m).value;
       if (!nome || !usuario || (!u && !senha)) { toast('Preencha nome, usuário e senha', 'erro'); return; }
-      // Config atual antes de gravar (o pacote é único e esta tela regrava tudo).
-      if (!(await STORE.pullCFG())) {
-        toast('Não consegui conferir a equipe atual (sem conexão). Tente salvar de novo.', 'erro');
+      if (senha && senha.length < 6) { toast('A senha precisa de ao menos 6 caracteres', 'erro'); return; }
+      // Ficar sem nenhum admin ativo tranca todo mundo fora do painel.
+      const adminsAtivos = usuarios.filter(x => x.papel === 'admin' && x.ativo !== false);
+      if (u && u.papel === 'admin' && adminsAtivos.length === 1 && norm(adminsAtivos[0].usuario) === norm(u.usuario)
+          && (papel !== 'admin' || !ativo)) {
+        toast('Este é o único admin ativo. Crie outro admin antes de mudar este.', 'erro'); return;
+      }
+      if (!u && usuarios.some(x => norm(x.usuario) === norm(usuario))) {
+        toast('Já existe um usuário com esse login', 'erro'); return;
+      }
+      const bt = $('.btn-salvar', m); bt.disabled = true; bt.textContent = 'Salvando…';
+      try {
+        await AUTH.salvarConta({
+          usuario: u ? u.usuario : usuario, nome, papel, ativo,
+          senha: senha || undefined,
+          // senha que EU defini para outra pessoa nasce temporária; a própria
+          // pessoa troca na entrada
+          temporaria: senha ? true : undefined,
+        });
+      } catch (e) {
+        bt.disabled = false; bt.textContent = 'Salvar';
+        toast(e.erro || 'Não consegui salvar', 'erro');
         return;
       }
-      const cfg2 = STORE.getCFG();
-      cfg2.usuarios = cfg2.usuarios || [];
-      const adminsAtivos = cfg2.usuarios.filter(x => x.papel === 'admin' && x.ativo !== false);
-      if (u) {
-        // Reencontra pelo NOME DE USUÁRIO: o índice da lista pode ter mudado se
-        // outro aparelho cadastrou alguém enquanto este modal estava aberto.
-        const idxAtual = cfg2.usuarios.findIndex(x => norm(x.usuario) === norm(u.usuario));
-        if (idxAtual < 0) { toast('Este usuário não existe mais na equipe.', 'erro'); m.remove(); adminUsuarios(alvo); return; }
-        const alvoU = cfg2.usuarios[idxAtual];
-        if (alvoU.papel === 'admin' && adminsAtivos.length === 1 && adminsAtivos[0].usuario === alvoU.usuario && (papel !== 'admin' || !ativo)) {
-          toast('Este é o único admin ativo. Crie outro admin antes de mudar este.', 'erro'); return;
-        }
-        alvoU.nome = nome; alvoU.papel = papel; alvoU.ativo = ativo;
-        if (senha) alvoU.senha = senha;
-      } else {
-        if (cfg2.usuarios.some(x => norm(x.usuario) === norm(usuario))) { toast('Já existe um usuário com esse login', 'erro'); return; }
-        cfg2.usuarios.push({ id: 'u-' + STORE.uuid().slice(0, 8), nome, usuario, senha, papel, ativo: true });
-      }
-      STORE.saveCFG(cfg2, SESSAO.nome);
       m.remove();
       toast('Usuário salvo ✓', 'sucesso');
       renderApp();
@@ -4230,6 +4331,14 @@ function adminUsuarios(alvo) {
   };
   $('#btn-novo-usuario').onclick = () => formUsuario(null);
   $$('[data-editar]', alvo).forEach(bt => bt.onclick = () => formUsuario(usuarios[Number(bt.dataset.editar)], Number(bt.dataset.editar)));
+  $$('[data-remover]', alvo).forEach(bt => bt.onclick = async () => {
+    const u = usuarios[Number(bt.dataset.remover)];
+    if (!u) return;
+    if (!confirm('Tirar o acesso de ' + u.nome + ' (' + u.usuario + ')? Os briefings dele continuam onde estão.')) return;
+    try { await AUTH.removerConta(u.usuario); } catch (e) { toast(e.erro || 'Não consegui remover', 'erro'); return; }
+    toast('Acesso removido ✓', 'sucesso');
+    renderApp();
+  });
 }
 
 function adminArquivos(alvo) {

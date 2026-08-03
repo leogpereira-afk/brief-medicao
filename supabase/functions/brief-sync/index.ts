@@ -412,7 +412,17 @@ Deno.serve(async (req: Request) => {
 
       case "setCfg": {
         if (!body.cfg) return resp({ error: "cfg ausente" }, 400);
-        await setCfgDb(body.cfg);
+        // O ELENCO NÃO É DO APP. Quem manda em cfg.usuarios é a equipe-auth,
+        // que reescreve a lista (sem senha nenhuma) a cada mudança de conta.
+        // O app manda o pacote de configuração INTEIRO ao salvar Fichas ou
+        // Configurações -- e mandaria junto a lista velha, ressuscitando as
+        // senhas em texto puro que acabamos de tirar daqui. Então o que vier
+        // do app nesse campo é descartado: vale sempre o que já está no banco.
+        const atualCfg = (await getCfg()) ?? {};
+        const cfgLimpo = { ...body.cfg };
+        if ("usuarios" in atualCfg) cfgLimpo.usuarios = (atualCfg as any).usuarios;
+        else delete cfgLimpo.usuarios;
+        await setCfgDb(cfgLimpo);
         if (body._quem) await registrarLog({ quem: body._quem, acao: "alterou configurações" });
         return resp({ ok: true });
       }
