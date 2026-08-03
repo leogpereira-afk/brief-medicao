@@ -372,7 +372,65 @@ function resumoVersao(b) {
   return { itens, fotos, medidas };
 }
 
+// Diferenças de campo a campo entre as duas versões, com rótulo de gente.
+// Sem isso o modal mostrava dois resumos idênticos ("2 itens · 6 fotos") e a
+// escolha era um chute -- o lado perdedor sumia em silêncio.
+function diferencasVersoes(local, servidor) {
+  const CAMPOS = [
+    ['cliente', 'Cliente'], ['responsavel', 'Contato'], ['telefone', 'Telefone'],
+    ['endereco', 'Endereço'], ['status', 'Status'], ['situacao', 'Situação'],
+    ['osNumero', 'O.S.'], ['tipoMedicao', 'Tipo de medição'], ['urgente', 'Urgência'],
+  ];
+  const out = [];
+  const mostrar = v => v === true ? 'sim' : v === false || v == null || v === '' ? '—' : String(v);
+  CAMPOS.forEach(([campo, rotulo]) => {
+    const a = local ? local[campo] : null, b = servidor ? servidor[campo] : null;
+    if (JSON.stringify(a ?? '') !== JSON.stringify(b ?? '')) out.push({ rotulo, minha: mostrar(a), outra: mostrar(b) });
+  });
+  const dl = (local && local.designerAtribuido && local.designerAtribuido.nome) || '';
+  const ds = (servidor && servidor.designerAtribuido && servidor.designerAtribuido.nome) || '';
+  if (dl !== ds) out.push({ rotulo: 'Designer', minha: dl || '—', outra: ds || '—' });
+  const pl = (local && local.pranchas || []).length, ps = (servidor && servidor.pranchas || []).length;
+  if (pl !== ps) out.push({ rotulo: 'Versões de prancha', minha: String(pl), outra: String(ps) });
+  return out;
+}
+
+// UM conflito por vez na tela. Sem esta fila, dois briefings conflitando (ou
+// um conflito + a confirmação de apagar) empilhavam modais persistentes um em
+// cima do outro -- na rua vira uma parede de decisões e o toque certo sai errado.
+const _conflitosNaFila = [];
+let _conflitoAberto = false;
+function _proximoConflito() {
+  _conflitoAberto = false;
+  const prox = _conflitosNaFila.shift();
+  if (prox) _tratarConflito(prox.local, prox.servidor);
+}
+
 STORE.onConflict((local, servidor) => {
+  if (_conflitoAberto) { _conflitosNaFila.push({ local, servidor }); return; }
+  _tratarConflito(local, servidor);
+});
+
+function _tratarConflito(local, servidor) {
+  // Ação pontual do detalhe esbarrou em edição alheia: reaplica a intenção
+  // por cima da versão nova e segue o baile -- nada se perde, ninguém escolhe.
+  const intent = local && local.id ? _intencoes.get(local.id) : null;
+  if (intent && intent.tentativas < 2 && (Date.now() - intent.em) < 60000) {
+    intent.tentativas++;
+    STORE.aceitarServidor(servidor);
+    const atual = STORE.getOS(servidor.id);
+    if (atual) {
+      gravarBriefing(atual, intent.mudar);
+      if (BRIEF && BRIEF.id === servidor.id) BRIEF = STORE.getOS(servidor.id);
+      renderApp();
+      const quemFoi = (servidor && servidor.atualizadoPor) || 'outro aparelho';
+      toast(quemFoi + ' salvou primeiro — sua mudança foi reaplicada por cima da versão mais nova ✓', 'sucesso');
+      _proximoConflito();
+      return;
+    }
+  }
+  if (local && local.id) _intencoes.delete(local.id);
+  _conflitoAberto = true;
   const rl = resumoVersao(local), rs = resumoVersao(servidor);
   const quem = (servidor && servidor.atualizadoPor) || 'outra pessoa';
   const quando = servidor && servidor.atualizadoEm ? fmtDataHora(servidor.atualizadoEm) : '';
@@ -386,6 +444,14 @@ STORE.onConflict((local, servidor) => {
     '<div class="versao"><div class="rot">A SUA (aqui)</div><div class="dados">' + linha(rl) + '</div></div>' +
     '<div class="versao"><div class="rot">A do outro aparelho</div><div class="dados">' + linha(rs) + '</div></div>' +
     '</div>' +
+    (function () {
+      const difs = diferencasVersoes(local, servidor).slice(0, 6);
+      if (!difs.length) return '';
+      return '<div class="card" style="margin-top:10px"><div class="sub-secao" style="margin-top:0">O que difere</div>' +
+        difs.map(d => '<div class="dupla-dado"><dt>' + esc(d.rotulo) + '</dt><dd>' +
+          esc(d.minha) + ' <span style="color:var(--cinza-4)">(sua)</span> · ' +
+          esc(d.outra) + ' <span style="color:var(--cinza-4)">(outro)</span></dd></div>').join('') + '</div>';
+    })() +
     (localMaior ? '<div class="aviso amarelo">A sua versão tem mais coisa. Usar a do outro aparelho apaga o que você mediu aqui.</div>' : '') +
     '<div class="acoes-modal">' +
     '<button class="botao btn-minha">Manter a minha</button>' +
@@ -397,6 +463,7 @@ STORE.onConflict((local, servidor) => {
       STORE.aceitarServidor(servidor);
       if (BRIEF && BRIEF.id === servidor.id) BRIEF = STORE.getOS(servidor.id);
       m.remove(); renderApp(); toast('Versão do outro aparelho aplicada');
+      _proximoConflito();
     };
     // Segunda confirmação só quando há mesmo o que perder.
     if (localMaior) {
@@ -408,8 +475,9 @@ STORE.onConflict((local, servidor) => {
   $('.btn-minha', m).onclick = () => {
     STORE.sobrescreverServidor(local);
     m.remove(); toast('Sua versão foi mantida e reenviada');
+    _proximoConflito();
   };
-});
+}
 
 STORE.on('quota', () => toast('Memória do aparelho cheia — briefings novos podem não estar sendo salvos. Sincronize e apague briefings antigos.', 'erro'));
 STORE.on('restauracao-servidor', (d) => {
@@ -2543,6 +2611,7 @@ function htmlEtapa2(cfg) {
     '<button class="botao suave" id="btn-buscar-os" style="min-width:110px">Buscar</button></div>' +
     '<div id="os-resultado">' +
     (BRIEF.osOrigem && BRIEF.osNumero ? '<div class="aviso verde">O.S. ' + esc(BRIEF.osNumero) + ' vinculada' + (BRIEF.osServico ? ': ' + esc(BRIEF.osServico) : '') + '</div>' : '') +
+    (BRIEF._avisoClienteOS ? '<div class="aviso amarelo">⚠ Essa O.S. está no nome de <b>' + esc(BRIEF._avisoClienteOS) + '</b> — confira se é a O.S. certa deste cliente.</div>' : '') +
     '</div>' +
     '<label class="chip ' + (BRIEF.semOS ? 'marcado' : '') + '" id="chip-semos" style="margin-top:8px; display:inline-flex">Sem O.S. por enquanto</label>' +
     '<div class="dica-campo">Sem número agora? Sem problema, o briefing segue e recebe a O.S. depois.</div></div>' +
@@ -2626,9 +2695,20 @@ function htmlEtapa4(cfg) {
     '<button class="botao mini fantasma" id="btn-manual-4">❓ Manual</button></div></div>' +
 
     (travado
-      ? '<div class="card"><div class="aviso amarelo" style="margin-top:0">🔒 Para adicionar itens, preencha antes na etapa 2: <b>' +
+      ? '<div class="card"><div class="aviso amarelo" style="margin-top:0">🔒 Para adicionar itens, preencha antes: <b>' +
         esc(falta.join(', ')) + '</b>. Assim a medida nunca fica sem dono.</div>' +
-        '<button class="botao largo suave" id="btn-ir-etapa2">Ir para a etapa 2</button></div>'
+        // O que dá pra resolver AQUI resolve aqui: na rua, mandar o vendedor
+        // de volta pra etapa 2 na frente do cliente é vaivém à toa. O tipo de
+        // medição vira dois toques no próprio aviso.
+        (!BRIEF.tipoMedicao
+          ? '<div class="escolha-tipo" style="display:flex; gap:8px; margin-bottom:10px">' +
+            '<div class="opcao" data-tipomed4="Orçamento">📄 Orçamento</div>' +
+            '<div class="opcao" data-tipomed4="Execução">⚠️ Execução</div></div>'
+          : '') +
+        (falta.some(f => f !== 'tipo de medição')
+          ? '<button class="botao largo suave" id="btn-ir-etapa2">Ir para a etapa 2</button>'
+          : '') +
+        '</div>'
       : '') +
 
     // Itens que vieram na O.S.: adianta o serviço, o vendedor só confere
@@ -3036,6 +3116,12 @@ function ligarEditor(cfg) {
   const ficha = $('#btn-ficha-visita'); if (ficha) ficha.onclick = () => exportarFichaVisita(BRIEF);
 
   // Etapa 4
+  $$('[data-tipomed4]').forEach(op => op.onclick = () => {
+    BRIEF.tipoMedicao = op.dataset.tipomed4;
+    salvarRascunho(true);
+    renderApp();
+    toast('Tipo de medição: ' + BRIEF.tipoMedicao + ' ✓', 'sucesso');
+  });
   const irE2 = $('#btn-ir-etapa2');
   if (irE2) irE2.onclick = () => {
     if (ehDesktop()) { const alvo = $('.etapa[data-etapa="2"]'); if (alvo) alvo.scrollIntoView({ behavior: 'smooth' }); }
@@ -3384,6 +3470,19 @@ async function buscarOS(botao) {
       BRIEF.osOrigem = res.origem;
       BRIEF.osServico = os.servico || '';
       BRIEF.semOS = false;
+      // O.S. no nome de OUTRO cliente: acontece na correria (número trocado,
+      // O.S. antiga do mesmo endereço). Não bloqueia -- às vezes é filial ou
+      // razão social diferente -- mas avisa em cima, senão a prancha e o PDF
+      // saem no nome errado e ninguém percebe até a fábrica.
+      BRIEF._avisoClienteOS = '';
+      if (BRIEF.cliente && os.cliente) {
+        const tok = t => norm(t).split(/[^a-z0-9]+/).filter(x => x.length > 2);
+        const meus = new Set(tok(BRIEF.cliente));
+        const daOS = tok(os.cliente);
+        if (daOS.length && !daOS.some(x => meus.has(x))) {
+          BRIEF._avisoClienteOS = os.cliente;
+        }
+      }
       // Itens da O.S. ficam disponíveis pra trazer pro briefing na etapa 4
       const itensOS = Array.isArray(os.itens) ? os.itens : [];
       // Buscou uma O.S. DIFERENTE da que trouxe os pendentes atuais? Eles são
@@ -3566,6 +3665,12 @@ function enviarBriefing() {
 // o que veio depois -- foi assim que uma prancha corrigida sumia ao mexer no
 // status. Então relemos do store, aplicamos a mudança em cima do ATUAL, e
 // deixamos o objeto da tela em dia pro próximo clique.
+// Intenções pendentes das ações do detalhe (status, repassar, lixeira...).
+// Se o envio esbarrar num conflito (outro aparelho salvou primeiro), a
+// intenção é REAPLICADA por cima da versão nova em vez de abrir o modal:
+// mudar o status não briga com o colega que corrigiu o telefone.
+const _intencoes = new Map(); // id -> { mudar, tentativas, em }
+
 function gravarBriefing(b, mudar) {
   if (!b) return false;
   const atual = (b.id && STORE.getOS(b.id)) || b;
@@ -3574,6 +3679,10 @@ function gravarBriefing(b, mudar) {
   alvo.atualizadoEm = new Date().toISOString();
   if (SESSAO) alvo.atualizadoPor = SESSAO.nome;
   const ok = STORE.saveOS(alvo);
+  if (ok && mudar && alvo.id) {
+    const antiga = _intencoes.get(alvo.id);
+    _intencoes.set(alvo.id, { mudar, tentativas: antiga ? antiga.tentativas : 0, em: Date.now() });
+  }
   Object.assign(b, JSON.parse(JSON.stringify(alvo)));
   return ok;
 }

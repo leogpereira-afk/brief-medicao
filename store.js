@@ -10,6 +10,7 @@ const STORE = (() => {
     LEMBRADO:   'app_sync_usuario_lembrado',
     INSTALADOR: 'app_sync_instalador',
     FILA:       'app_sync_fila',
+    STAMPS:     'app_sync_stamps',
     LASTSYNC:   'app_sync_lastsync'
   };
 
@@ -110,6 +111,8 @@ const STORE = (() => {
     // edição alheia do último minuto era sobrescrita em silêncio (o teste por
     // "quem tem timestamp maior" nunca dispara nesse sentido).
     const base = idx >= 0 ? (all[idx].atualizadoEm || null) : null;
+    if (base) registrarStamp(os.id, base);
+    if (os.atualizadoEm) registrarStamp(os.id, os.atualizadoEm);
     if (idx >= 0) all[idx] = os;
     else all.push(os);
     const ok = _setAllOS(all);
@@ -198,6 +201,27 @@ const STORE = (() => {
   }
 
   // ── Fila offline ──────────────────────────────────────────────────────────
+  // Carimbos (atualizadoEm) que ESTE aparelho já teve no cache, por briefing.
+  // São os "ancestrais conhecidos": se um conflito apontar pra um carimbo que
+  // já passou por aqui, o servidor não tem nada que este aparelho não viu --
+  // a edição local foi construída EM CIMA daquilo e pode seguir sem perguntar.
+  // (É o que fecha o falso conflito do ack perdido: o app enviou, o servidor
+  // aplicou, a resposta se perdeu no sinal ruim/reload -- e a edição seguinte
+  // "conflitava" com a própria escrita.)
+  function _stampsVistos() { return lsGet(K.STAMPS, {}); }
+  function registrarStamp(id, stamp) {
+    if (!id || !stamp) return;
+    const m = _stampsVistos();
+    const l = m[id] || [];
+    if (l.includes(stamp)) return;
+    l.push(stamp);
+    m[id] = l.slice(-20);
+    lsSet(K.STAMPS, m);
+  }
+  function stampVisto(id, stamp) {
+    return !!(id && stamp && (_stampsVistos()[id] || []).includes(stamp));
+  }
+
   function getQueue() { return lsGet(K.FILA, []); }
   // Quantos itens da fila já falharam várias vezes seguidas -- o chip usa isso
   // pra trocar "N pendente(s)" (parece saudável) por um aviso com erro.
@@ -424,6 +448,16 @@ const STORE = (() => {
               servidorVenceu++;
               continue;
             }
+            // Falso conflito: a versão do servidor é um carimbo que este
+            // aparelho JÁ TEVE (a edição local foi feita em cima dela; a base
+            // só ficou velha porque um ack se perdeu). Atualiza a base e
+            // deixa o próximo ciclo reenviar -- sem incomodar ninguém.
+            if (res.servidor && stampVisto(item.os && item.os.id, res.servidor.atualizadoEm)) {
+              const q2 = getQueue();
+              const qi = q2.findIndex(x => _sigFila(x) === sig);
+              if (qi >= 0) { q2[qi].baseAtualizadoEm = res.servidor.atualizadoEm; lsSet(K.FILA, q2); }
+              continue;
+            }
             _flagged.add(sig);                 // não retentar até resolução
             _notifyConflict(item.os, res.servidor);
             continue;                          // segue para o próximo item
@@ -449,6 +483,7 @@ const STORE = (() => {
               }
               _setAllOS(all);
             }
+            registrarStamp(res.os.id, res.os.atualizadoEm);
             // Se sobrou um upsert mais novo na fila (edição feita durante o
             // envio), a base dele passa a ser a versão que o servidor acabou
             // de confirmar -- senão o próximo envio geraria falso conflito.
@@ -566,6 +601,7 @@ const STORE = (() => {
             const tsLocal  = localOS.atualizadoEm ? new Date(localOS.atualizadoEm).getTime() : 0;
             if (tsRemote > tsLocal) {
               Object.assign(localOS, remote);
+              registrarStamp(remote.id, remote.atualizadoEm);
               changed = true;
             }
           }
@@ -713,16 +749,11 @@ const STORE = (() => {
     // Salva local (IndexedDB)
     await putFoto(fileId, base64, mime);
 
-    // Tenta enviar ao servidor
-    if (navigator.onLine) {
-      try {
-        const res = await api({ action: 'putPhoto', base64, mime, fileId });
-        return res.fileId || fileId;
-      } catch {}
-    }
-
-    // Falhou → enfileira só o fileId (o base64 já está no IndexedDB)
+    // NUNCA espera a rede: o "tento mandar agora" custava até 17s de slot
+    // congelado por foto no sinal lento da rua (medido). A fila faz o MESMO
+    // upload em segundo plano; a foto aparece na tela na hora.
     _enqueue({ action: 'putPhoto', mime, fileId });
+    agendarSync();
     return fileId;
   }
 
@@ -784,6 +815,7 @@ const STORE = (() => {
   // ── Resolver conflito manualmente ─────────────────────────────────────────
   // Sobrescreve O.S local com versão do servidor
   function aceitarServidor(remoteOS) {
+    if (remoteOS && remoteOS.id && remoteOS.atualizadoEm) registrarStamp(remoteOS.id, remoteOS.atualizadoEm);
     const all = getAllOS();
     const idx = all.findIndex(o => o.id === remoteOS.id);
     if (idx >= 0) all[idx] = remoteOS; else all.push(remoteOS);
