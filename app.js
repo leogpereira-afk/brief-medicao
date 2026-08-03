@@ -504,7 +504,13 @@ async function boot() {
   // Config e lista buscam EM PARALELO (antes era em fila: esperava a config pra
   // só então buscar a lista -- dois round-trips somados, sentidos no cold start
   // da manhã). Cada um redesenha quando chega.
-  STORE.pullCFG().then(() => { conferirAcesso(); renderApp(); });
+  // Só concluir a partir de uma lista RECÉM-conferida. pullCFG devolve false
+  // quando não conseguiu falar com o servidor; antes, o retorno era ignorado e
+  // a conferência rodava contra a cópia velha do aparelho. Isso não doía
+  // enquanto o login também vinha dessa cópia — agora dói: dá para ter sessão
+  // legítima de alguém que este aparelho nunca viu, ser expulso por uma lista
+  // desatualizada e não conseguir voltar, porque entrar agora exige internet.
+  STORE.pullCFG().then(ok => { if (ok) conferirAcesso(); renderApp(); });
   STORE.pull(() => renderApp()).then(() => STORE.trySync());
 
   // Sincronização de fundo: só com o app À VISTA (não gasta bateria/dados em
@@ -513,7 +519,7 @@ async function boot() {
     if (document.visibilityState && document.visibilityState !== 'visible') return;
     // A config vem junto: é o que revoga o acesso de quem foi desligado sem
     // depender da pessoa fechar e reabrir o app.
-    STORE.pullCFG().then(conferirAcesso);
+    STORE.pullCFG().then(ok => ok && conferirAcesso());
     STORE.pull(atualizarPorSync);
     STORE.trySync();
   }, 60000);
