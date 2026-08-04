@@ -731,6 +731,7 @@ function abrirMenu() {
     '<button class="item" id="menu-ficha">🖨 Ficha de visita em branco (PDF)</button>' +
     '<button class="item" id="menu-manual">❓ Manual de medição e fotos</button>' +
     '<button class="item" id="menu-sync">🔄 Sincronizar agora</button>' +
+    '<a href="#/trocar-senha">🔑 Trocar a minha senha</a>' +
     '<button class="item" id="menu-sair">🚪 Sair da conta</button>';
   document.body.appendChild(fundo);
   document.body.appendChild(sheet);
