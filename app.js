@@ -2661,6 +2661,12 @@ const ETAPAS_DEF = [
   { n: 5, nome: 'Observações' },
   { n: 6, nome: 'Revisão e envio' }
 ];
+// Pro medidor a etapa 6 não é "revisão e envio" — ele não envia nada: é o
+// fechamento da visita dele. Um só lugar decide o rótulo, senão o cabeçalho e a
+// barra lateral discordam (foi o que aconteceu na primeira tentativa).
+function nomeEtapa(n) {
+  return (souMedidor() && n === 6) ? 'Fechar a visita' : ETAPAS_DEF[n - 1].nome;
+}
 
 function renderEditor(app) {
   const b = STORE.getOS(ROTA.id);
@@ -2699,11 +2705,10 @@ function renderEditor(app) {
     htmlTopo((BRIEF.numeroBrief ? 'Nº ' + padBrief(BRIEF.numeroBrief) + ' · ' : '') + (BRIEF.cliente || 'Novo briefing')) +
     '<main class="miolo"><div class="editor-grade">' +
     '<aside class="sidebar-etapas">' +
-    // Pro medidor a etapa 6 não é "revisão e envio" (ele não envia): é o
-    // fechamento da visita dele.
-    ETAPAS_DEF.map(e => (souMedidor() && e.n === 6 ? { ...e, nome: 'Fechar a visita' } : e))
-      .filter(e => !souMedidor() || e.n >= 4)
-      .map(e => '<a href="#" data-etapa="' + e.n + '" class="' + (e.n === ETAPA ? 'ativa' : '') + '">' + e.n + '. ' + e.nome + '</a>').join('') +
+    ETAPAS_DEF.filter(e => !souMedidor() || e.n >= 4)
+      // A numeração acompanha o cabeçalho: pro medidor a etapa 4 é a "1 de 3".
+      .map(e => '<a href="#" data-etapa="' + e.n + '" class="' + (e.n === ETAPA ? 'ativa' : '') + '">' +
+        (souMedidor() ? e.n - 3 : e.n) + '. ' + nomeEtapa(e.n) + '</a>').join('') +
     '<div style="padding:12px 14px"><span id="salvo-info" class="salvo-info"></span></div>' +
     '</aside>' +
     '<div>' +
@@ -2735,9 +2740,9 @@ function renderEditor(app) {
         '</div></div>'
       : '') +
     (souMedidor()
-      ? '<div class="progresso"><div class="passos"><span>Etapa ' + (ETAPA - 3) + ' de 3</span><span>' + esc(ETAPAS_DEF[ETAPA - 1].nome) + '</span></div>' +
+      ? '<div class="progresso"><div class="passos"><span>Etapa ' + (ETAPA - 3) + ' de 3</span><span>' + esc(nomeEtapa(ETAPA)) + '</span></div>' +
         '<div class="trilho"><div class="barra" style="width:' + ((ETAPA - 3) / 3 * 100) + '%"></div></div></div>'
-      : '<div class="progresso"><div class="passos"><span>Etapa ' + ETAPA + ' de 6</span><span>' + esc(ETAPAS_DEF[ETAPA - 1].nome) + '</span></div>' +
+      : '<div class="progresso"><div class="passos"><span>Etapa ' + ETAPA + ' de 6</span><span>' + esc(nomeEtapa(ETAPA)) + '</span></div>' +
         '<div class="trilho"><div class="barra" style="width:' + (ETAPA / 6 * 100) + '%"></div></div></div>') +
     (souMedidor() ? '' : htmlEtapa1() + htmlEtapa2(cfg) + htmlEtapa3()) +
     htmlEtapa4(cfg) + htmlEtapa5() + htmlEtapa6() +
