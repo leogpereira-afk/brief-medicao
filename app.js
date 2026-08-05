@@ -4244,7 +4244,7 @@ function abrirVincularOS(b) {
 /* ══════════════════ Admin ══════════════════ */
 
 const ABAS_ADMIN = [
-  { id: 'usuarios', nome: 'Usuários' },
+  { id: 'usuarios', nome: '🔑 Acessos' },
   { id: 'fichas', nome: 'Fichas dos setores' },
   { id: 'arquivos', nome: 'Arquivos e lixeira' },
   { id: 'armazenamento', nome: 'Armazenamento' },
@@ -4535,64 +4535,124 @@ function avisoEntrarDeNovo(alvo, motivo) {
   };
 }
 
+// ── Acessos da equipe (Central de Acessos) ────────────────────────────────
+// Esta tela é usada DA RUA: o dono contrata alguém de manhã e cria o acesso do
+// celular, no carro. Por isso: cartões (tabela de 5 colunas não cabe no
+// telefone), busca (a equipe passa de 30), senha SUGERIDA em palavras (dá pra
+// ditar por telefone sem soletrar) e o botão de mandar os dados pelo WhatsApp,
+// que é como a informação realmente chega na pessoa.
+const PAPEL_INFO = {
+  vendedor: { ic: '📐', desc: 'faz o briefing na visita, vê os briefings dele' },
+  medidor:  { ic: '📍', desc: 'só a agenda de visitas direcionadas a ele' },
+  designer: { ic: '🎨', desc: 'recebe briefings, gera pranchas, vê todos' },
+  admin:    { ic: '🛠', desc: 'tudo, inclusive este painel' },
+};
+// Senha ditável: quem recebe vai digitar isso no celular, na obra.
+function senhaDitavel() {
+  const a = ['sol', 'lua', 'rio', 'mar', 'ceu', 'pao', 'flor', 'vento', 'pedra', 'folha'];
+  const b = ['azul', 'verde', 'claro', 'forte', 'novo', 'leve', 'alto', 'certo'];
+  const p = l => l[Math.floor(Math.random() * l.length)];
+  return p(a) + '-' + p(b) + '-' + String(Math.floor(Math.random() * 900) + 100);
+}
+
+let _buscaEquipe = '';
+
 async function adminUsuarios(alvo) {
   // Sessão de antes da virada não tem crachá: pedir para entrar de novo é a
   // resposta honesta — dizer "apenas a gestão" para o próprio dono não é.
   if (!AUTH.temCracha()) { avisoEntrarDeNovo(alvo, 'Sua sessão é anterior ao login novo.'); return; }
-  alvo.innerHTML = '<div class="card"><div class="sub-secao">Equipe</div><p class="dica-campo">Carregando…</p></div>';
-  let usuarios = [], papeisOk = ['vendedor', 'designer', 'admin'];
+  alvo.innerHTML = '<div class="card"><div class="sub-secao">Acessos</div><p class="dica-campo">Carregando…</p></div>';
+  let usuarios = [], papeisOk = ['vendedor', 'designer', 'medidor', 'admin'];
   try {
     const r = await AUTH.listarContas();
     usuarios = r.contas || [];
     if (r.papeis && r.papeis.length) papeisOk = r.papeis;
   } catch (e) {
     if (e.status === 401 || e.status === 403) { avisoEntrarDeNovo(alvo, 'Sua sessão expirou.'); return; }
-    alvo.innerHTML = '<div class="card"><div class="sub-secao">Equipe</div>' +
+    alvo.innerHTML = '<div class="card"><div class="sub-secao">Acessos</div>' +
       '<div class="aviso vermelho">Não consegui ler a equipe: ' + esc(e.erro || e.message) + '</div>' +
       '<p class="dica-campo">Esta tela precisa de internet — os acessos moram no servidor.</p></div>';
     return;
   }
-  alvo.innerHTML =
-    '<div class="card"><div class="sub-secao">Equipe (' + usuarios.length + ')</div>' +
-    '<table class="tabela"><tr><th>Nome</th><th>Usuário</th><th>Perfil</th><th>Situação</th><th></th></tr>' +
-    usuarios.map((u, i) =>
-      '<tr><td>' + esc(u.nome) + '</td><td>' + esc(u.usuario) + '</td><td>' + esc(u.papel) + '</td>' +
-      '<td>' + (u.ativo === false ? '<span class="badge rascunho">desativado</span>'
-        : u.trocarSenha ? '<span class="badge rascunho">senha temporária</span>'
-        : '<span class="badge status-concluido">ativo</span>') + '</td>' +
-      '<td style="white-space:nowrap"><button class="botao mini suave" data-editar="' + i + '">Editar</button>' +
-      '<button class="botao mini suave" data-remover="' + i + '" style="margin-left:6px">Remover</button></td></tr>'
-    ).join('') + '</table>' +
-    '<p class="dica-campo" style="margin-top:10px">A senha fica no servidor, embaralhada — nem eu nem você conseguimos lê-la. ' +
-    'Senha que você cria para outra pessoa é temporária: ela troca na primeira entrada.</p>' +
-    '<button class="botao" id="btn-novo-usuario" style="margin-top:12px">➕ Novo usuário</button></div>';
 
-  const formUsuario = (u, idx) => {
+  const filtrados = _buscaEquipe
+    ? usuarios.filter(u => norm(u.nome + ' ' + u.usuario + ' ' + u.papel).includes(norm(_buscaEquipe)))
+    : usuarios;
+  const porPapel = {};
+  usuarios.forEach(u => { porPapel[u.papel] = (porPapel[u.papel] || 0) + 1; });
+
+  alvo.innerHTML =
+    '<div class="card">' +
+    '<div class="sub-secao">Acessos da equipe (' + usuarios.length + ')</div>' +
+    '<p class="dica-campo" style="margin-bottom:10px">' +
+    papeisOk.map(p => (PAPEL_INFO[p] ? PAPEL_INFO[p].ic + ' ' : '') + p + ': ' + (porPapel[p] || 0)).join(' · ') +
+    '</p>' +
+    '<div class="campo" style="margin-bottom:0"><input id="busca-equipe" type="search" ' +
+    'placeholder="Buscar por nome, login ou perfil" value="' + esc(_buscaEquipe) + '"></div>' +
+    '</div>' +
+    (filtrados.length ? filtrados.map((u) => {
+      const i = usuarios.indexOf(u);
+      const info = PAPEL_INFO[u.papel] || { ic: '👤', desc: '' };
+      return '<div class="card cartao-acesso">' +
+        '<div class="ca-topo">' +
+        '<div><b>' + esc(u.nome) + '</b>' +
+        '<div class="dica-campo">' + info.ic + ' ' + esc(u.papel) + ' · ' + esc(u.usuario) + '</div></div>' +
+        (u.ativo === false ? '<span class="badge rascunho">desativado</span>'
+          : u.trocarSenha ? '<span class="badge rascunho">senha temporária</span>'
+          : '<span class="badge status-concluido">ativo</span>') +
+        '</div>' +
+        (info.desc ? '<div class="dica-campo" style="margin-top:4px">' + esc(info.desc) + '</div>' : '') +
+        '<div class="ca-acoes">' +
+        '<button class="botao mini suave" data-editar="' + i + '">✏️ Editar</button>' +
+        '<button class="botao mini suave" data-senha="' + i + '">🔑 Nova senha</button>' +
+        '<button class="botao mini fantasma" data-remover="' + i + '">Remover</button>' +
+        '</div></div>';
+    }).join('')
+      : '<div class="card"><p class="dica-campo" style="margin:0">Ninguém encontrado com “' + esc(_buscaEquipe) + '”.</p></div>') +
+    '<div class="card"><button class="botao largo" id="btn-novo-usuario">➕ Novo acesso</button>' +
+    '<p class="dica-campo" style="margin-top:10px">A senha fica no servidor, embaralhada — nem eu nem você conseguimos lê-la. ' +
+    'A senha que você cria para outra pessoa é temporária: ela troca na primeira entrada.</p></div>';
+
+  const busca = $('#busca-equipe', alvo);
+  if (busca) busca.oninput = debounce(e => { _buscaEquipe = e.target.value; adminUsuarios(alvo); }, 300);
+
+  // Manda usuário e senha por WhatsApp: é assim que a informação chega em quem
+  // está na obra. Só a senha TEMPORÁRIA passa por aqui — a definitiva a própria
+  // pessoa escolhe na primeira entrada, e ninguém mais a conhece.
+  const mandarAcesso = (nome, usuario, senha) => {
+    const txt = 'Oi ' + nome.split(' ')[0] + '! Seu acesso ao *Brief de Medição* da Impresilk:\n\n' +
+      'Usuário: *' + usuario + '*\nSenha: *' + senha + '*\n\n' +
+      'Entre em ' + 'https://impresilk.com.br/brief' + ' — na primeira entrada o app pede pra você criar a sua senha.';
+    window.open('https://wa.me/?text=' + encodeURIComponent(txt), '_blank', 'noopener');
+  };
+
+  const formUsuario = (u) => {
+    const sugerida = u ? '' : senhaDitavel();
     const m = abrirModal(
-      '<h3>' + (u ? 'Editar usuário' : 'Novo usuário') + '</h3>' +
+      '<h3>' + (u ? 'Editar acesso' : 'Novo acesso') + '</h3>' +
       '<div class="campo"><label>Nome</label><input id="u-nome" value="' + esc(u ? u.nome : '') + '"></div>' +
       '<div class="campo"><label>Usuário (login)</label><input id="u-usuario" autocapitalize="none" value="' + esc(u ? u.usuario : '') + '"' + (u ? ' disabled' : '') + '></div>' +
       '<div class="campo"><label>Perfil</label><select id="u-papel">' +
-      papeisOk.map(p => '<option ' + (u && u.papel === p ? 'selected' : '') + '>' + p + '</option>').join('') + '</select></div>' +
-      // Senha mascarada, com botão pra mostrar. Antes saía em texto puro na
-      // tela do admin -- quem passasse atrás lia a senha da equipe inteira.
+      papeisOk.map(p => '<option value="' + esc(p) + '" ' + (u && u.papel === p ? 'selected' : '') + '>' +
+        (PAPEL_INFO[p] ? PAPEL_INFO[p].ic + ' ' : '') + p + '</option>').join('') + '</select>' +
+      '<div class="dica-campo" id="u-papel-desc"></div></div>' +
       '<div class="campo"><label>' + (u ? 'Nova senha (deixe em branco pra manter)' : 'Senha') + '</label>' +
       '<div style="display:flex; gap:8px">' +
-      '<input id="u-senha" type="password" autocomplete="new-password" style="flex:1">' +
-      '<button type="button" class="botao mini fantasma" id="u-ver-senha">👁 Mostrar</button></div></div>' +
-      (u ? '<div class="campo"><label class="chip ' + (u.ativo !== false ? 'marcado' : '') + '" id="u-ativo">Usuário ativo</label></div>' : '') +
+      '<input id="u-senha" type="text" autocomplete="new-password" style="flex:1" value="' + esc(sugerida) + '">' +
+      '<button type="button" class="botao mini fantasma" id="u-sugerir">🎲</button></div>' +
+      '<div class="dica-campo">Palavras em vez de código: dá pra ditar por telefone.</div></div>' +
+      (u ? '<div class="campo"><label class="chip ' + (u.ativo !== false ? 'marcado' : '') + '" id="u-ativo">Acesso ativo</label></div>' : '') +
       '<div class="acoes-modal"><button class="botao fantasma btn-cancelar">Cancelar</button><button class="botao btn-salvar">Salvar</button></div>'
     );
+    const descreve = () => {
+      const p = $('#u-papel', m).value;
+      $('#u-papel-desc', m).textContent = (PAPEL_INFO[p] || {}).desc || '';
+    };
+    $('#u-papel', m).onchange = descreve; descreve();
+    $('#u-sugerir', m).onclick = () => { $('#u-senha', m).value = senhaDitavel(); };
     let ativo = !u || u.ativo !== false;
     const chipAtivo = $('#u-ativo', m);
     if (chipAtivo) chipAtivo.onclick = () => { ativo = !ativo; chipAtivo.classList.toggle('marcado', ativo); };
-    const verSenha = $('#u-ver-senha', m);
-    if (verSenha) verSenha.onclick = () => {
-      const campo = $('#u-senha', m);
-      const escondida = campo.type === 'password';
-      campo.type = escondida ? 'text' : 'password';
-      verSenha.textContent = escondida ? '🙈 Esconder' : '👁 Mostrar';
-    };
     $('.btn-cancelar', m).onclick = () => m.remove();
     $('.btn-salvar', m).onclick = async () => {
       const nome = $('#u-nome', m).value.trim();
@@ -4608,15 +4668,13 @@ async function adminUsuarios(alvo) {
         toast('Este é o único admin ativo. Crie outro admin antes de mudar este.', 'erro'); return;
       }
       if (!u && usuarios.some(x => norm(x.usuario) === norm(usuario))) {
-        toast('Já existe um usuário com esse login', 'erro'); return;
+        toast('Já existe um acesso com esse login', 'erro'); return;
       }
       const bt = $('.btn-salvar', m); bt.disabled = true; bt.textContent = 'Salvando…';
       try {
         await AUTH.salvarConta({
           usuario: u ? u.usuario : usuario, nome, papel, ativo,
           senha: senha || undefined,
-          // senha que EU defini para outra pessoa nasce temporária; a própria
-          // pessoa troca na entrada
           temporaria: senha ? true : undefined,
         });
       } catch (e) {
@@ -4625,12 +4683,40 @@ async function adminUsuarios(alvo) {
         return;
       }
       m.remove();
-      toast('Usuário salvo ✓', 'sucesso');
+      toast('Acesso salvo ✓', 'sucesso');
+      // Criou ou trocou a senha: oferece mandar na hora, que é o passo que
+      // costuma ficar esquecido (acesso criado e ninguém avisa a pessoa).
+      if (senha) {
+        const login = u ? u.usuario : usuario;
+        const m2 = abrirModal(
+          '<h3>Avisar ' + esc(nome.split(' ')[0]) + '</h3>' +
+          '<p class="dica-campo">Usuário <b>' + esc(login) + '</b> · senha temporária <b>' + esc(senha) + '</b></p>' +
+          '<p class="dica-campo">Ela troca na primeira entrada — depois disso ninguém mais conhece a senha dela.</p>' +
+          '<div class="acoes-modal"><button class="botao fantasma btn-depois">Depois</button>' +
+          '<button class="botao btn-zap">💬 Mandar no WhatsApp</button></div>'
+        );
+        $('.btn-depois', m2).onclick = () => { m2.remove(); renderApp(); };
+        $('.btn-zap', m2).onclick = () => { mandarAcesso(nome, login, senha); m2.remove(); renderApp(); };
+        return;
+      }
       renderApp();
     };
   };
+
   $('#btn-novo-usuario').onclick = () => formUsuario(null);
-  $$('[data-editar]', alvo).forEach(bt => bt.onclick = () => formUsuario(usuarios[Number(bt.dataset.editar)], Number(bt.dataset.editar)));
+  $$('[data-editar]', alvo).forEach(bt => bt.onclick = () => formUsuario(usuarios[Number(bt.dataset.editar)]));
+  // Atalho da rua: "esqueci a senha" resolve em dois toques, sem abrir o form.
+  $$('[data-senha]', alvo).forEach(bt => bt.onclick = async () => {
+    const u = usuarios[Number(bt.dataset.senha)];
+    if (!u) return;
+    const nova = senhaDitavel();
+    if (!confirm('Gerar uma senha nova para ' + u.nome + '?\n\n    ' + nova + '\n\nEla troca na primeira entrada.')) return;
+    try { await AUTH.salvarConta({ usuario: u.usuario, nome: u.nome, papel: u.papel, ativo: u.ativo !== false, senha: nova, temporaria: true }); }
+    catch (e) { toast(e.erro || 'Não consegui trocar', 'erro'); return; }
+    toast('Senha nova gerada ✓', 'sucesso');
+    mandarAcesso(u.nome, u.usuario, nova);
+    renderApp();
+  });
   $$('[data-remover]', alvo).forEach(bt => bt.onclick = async () => {
     const u = usuarios[Number(bt.dataset.remover)];
     if (!u) return;
@@ -4640,7 +4726,6 @@ async function adminUsuarios(alvo) {
     renderApp();
   });
 }
-
 function adminArquivos(alvo) {
   const lixeira = STORE.getAllOS().filter(b => b && b.apagadoEm)
     .sort((a, z) => String(z.apagadoEm).localeCompare(String(a.apagadoEm)));

@@ -655,3 +655,8 @@ input:focus, select:focus, textarea:focus { outline: none; border-color: var(--i
 .badge.medidor { background: #eef0ff; color: #2626b8; }
 /* cabeçalho da rua: o que o medidor precisa antes de medir */
 .cabeca-rua { border-left: 5px solid var(--azul, #3b3bec); margin-bottom: 12px; }
+
+/* ── acessos: cartões em vez de tabela (esta tela é usada no celular) ───── */
+.cartao-acesso { padding: 14px 15px; margin-bottom: 10px; }
+.ca-topo { display: flex; align-items: flex-start; justify-content: space-between; gap: 10px; }
+.ca-acoes { display: flex; gap: 8px; flex-wrap: wrap; margin-top: 10px; }
