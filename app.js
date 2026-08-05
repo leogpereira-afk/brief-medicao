@@ -650,7 +650,9 @@ function htmlTopo(tituloTela) {
     // saída era o ☰ -- quem usa no celular, que é a maioria, não descobria que
     // existiam Arquivos e Gerador de layout.
     '<nav class="nav-topo">' +
-    '<a href="#/lista" class="' + (ROTA.nome === 'lista' ? 'ativo' : '') + '">📋 Briefings</a>' +
+    (souMedidor()
+      ? '<a href="#/agenda" class="' + (ROTA.nome === 'agenda' ? 'ativo' : '') + '">📍 Minhas visitas</a>'
+      : '<a href="#/lista" class="' + (ROTA.nome === 'lista' ? 'ativo' : '') + '">📋 Briefings</a>') +
     (podeCriar() ? '<a href="#/novo" class="' + (ROTA.nome === 'novo' || ROTA.nome === 'editor' ? 'ativo' : '') + '">➕ Novo</a>' : '') +
     (podeVerArquivos() ? '<a href="#/arquivos" class="' + (ROTA.nome === 'arquivos' ? 'ativo' : '') + '">🖼 Arquivos</a>' : '') +
     (podeUsarLayout() ? '<a href="#/layout" class="' + (ROTA.nome === 'layout' ? 'ativo' : '') + '">🗂 Layout</a>' : '') +
@@ -2844,7 +2846,7 @@ function htmlEtapa4(cfg) {
   return (
     '<section class="etapa" data-etapa="4">' +
     '<div class="card" style="display:flex; align-items:center; justify-content:space-between; gap:10px; flex-wrap:wrap">' +
-    '<div><div class="sub-secao" style="margin:0">Etapa 4 · Itens medidos</div>' +
+    '<div><div class="sub-secao" style="margin:0">' + (souMedidor() ? 'Itens medidos' : 'Etapa 4 · Itens medidos') + '</div>' +
     '<span class="dica-campo">' + BRIEF.itens.length + ' item(ns) · ' + prontos + ' completo(s)</span></div>' +
     '<div style="display:flex; gap:6px">' +
     (BRIEF.itens.length > 1 ? '<button class="botao mini fantasma" id="btn-recolher-todos">Recolher todos</button>' : '') +
@@ -3058,7 +3060,7 @@ function htmlEtapa5() {
     '<button class="chip ' + (marcado ? 'marcado' : '') + '" data-' + attr + '="' + esc(valor) + '">' + esc(rotulo || valor) + '</button>';
   return (
     '<section class="etapa" data-etapa="5"><div class="card">' +
-    '<div class="sub-secao">Etapa 5 · Observações gerais</div>' +
+    '<div class="sub-secao">' + (souMedidor() ? 'Observações gerais' : 'Etapa 5 · Observações gerais') + '</div>' +
 
     '<div class="campo"><label>Tem ponto de energia próximo?</label>' +
     '<div class="opcoes duas">' +
@@ -3116,7 +3118,7 @@ function htmlEtapa6() {
   const semOS = !String(BRIEF.osNumero || '').trim();
   return (
     '<section class="etapa" data-etapa="6"><div class="card">' +
-    '<div class="sub-secao">Etapa 6 · Revisão e envio</div>' +
+    '<div class="sub-secao">' + (souMedidor() ? 'Fechar a visita' : 'Etapa 6 · Revisão e envio') + '</div>' +
     '<dl>' +
     '<div class="dupla-dado"><dt>Número do brief</dt><dd>' + esc(rotuloBrief(BRIEF)) + '</dd></div>' +
     '<div class="dupla-dado"><dt>Cliente</dt><dd>' + esc(BRIEF.cliente || '') + '</dd></div>' +
