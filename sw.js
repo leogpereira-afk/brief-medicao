@@ -3,7 +3,7 @@
 //
 // DISCIPLINA: bump no CACHE (v1 → v2 → …) A CADA deploy, senão os aparelhos
 // ficam presos na versão antiga.
-const CACHE = 'brief-shell-v43';
+const CACHE = 'brief-shell-v44';
 const SHELL = [
   './', 'index.html', 'config.js', 'store.js', 'auth.js', 'app.js', 'pdf.js', 'prancha.js', 'styles.css', 'sw.js',
   'manifest.webmanifest', 'logo-impresilk.png', 'logo-impresilk-branco.png',
@@ -21,7 +21,10 @@ self.addEventListener('install', e => {
     // CDN: allSettled — falha de rede externa não bloqueia a instalação.
     const core = SHELL.filter(u => !u.startsWith('http'));
     const cdn  = SHELL.filter(u => u.startsWith('http'));
-    await c.addAll(core);
+    // cache:'reload' por arquivo: sem isto o SW guarda o que estava no cache
+    // HTTP do navegador (o Pages manda max-age=600) e passa a SERVIR a versão
+    // velha até o próximo bump — a equipe não recebe a correção recém-publicada.
+    await c.addAll(core.map(u => new Request(u, { cache: 'reload' })));
     await Promise.allSettled(cdn.map(u => c.add(u)));
     self.skipWaiting();
   })());
