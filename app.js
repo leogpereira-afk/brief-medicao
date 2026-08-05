@@ -603,7 +603,8 @@ function lerRota() {
   if (partes[0] === 'entrar') { ROTA = { nome: 'login', area: partes[1] || 'comercial' }; return; }
   if (h === 'trocar-senha') { ROTA = { nome: 'senha' }; return; }
   if (!SESSAO) { ROTA = { nome: 'inicio' }; return; }
-  if (h === 'lista') ROTA = { nome: 'lista' };
+  if (h === 'agenda') ROTA = { nome: 'agenda' };
+  else if (h === 'lista') ROTA = { nome: 'lista' };
   else if (h === 'login') ROTA = { nome: 'login', area: 'comercial' };
   else if (h === 'novo') ROTA = { nome: 'novo' };
   else if (partes[0] === 'editar') ROTA = { nome: 'editor', id: partes[1] };
@@ -821,7 +822,10 @@ function renderApp() {
     case 'editor': return renderEditor(app);
     case 'detalhe': return renderDetalhe(app);
     case 'admin': return renderAdmin(app);
-    default: return renderLista(app);
+    case 'agenda': return renderAgenda(app);
+    // O medidor não tem lista de briefings: a casa dele é a agenda. Cair na
+    // lista mostraria briefing que não é dele e telas que não pode usar.
+    default: return souMedidor() ? renderAgenda(app) : renderLista(app);
   }
 }
 
@@ -831,8 +835,25 @@ function renderApp() {
 const AREAS = {
   comercial: { rotulo: 'Comercial', papeis: ['vendedor', 'admin'], destino: '#/lista' },
   designer:  { rotulo: 'Designer',  papeis: ['designer', 'admin'], destino: '#/lista' },
+  // Quem vai à rua medir. A casa dele é a AGENDA (o que tem pra hoje), não a
+  // lista de briefings -- ele pensa em compromisso, não em cadastro.
+  medicao:   { rotulo: 'Medição',   papeis: ['medidor', 'admin'],  destino: '#/agenda' },
   admin:     { rotulo: 'Painel de controle', papeis: ['admin'],    destino: '#/admin' }
 };
+
+function souMedidor() { return SESSAO && SESSAO.papel === 'medidor'; }
+function medidoresAtivos() {
+  return ((STORE.getCFG() || {}).usuarios || [])
+    .filter(u => (u.papel === 'medidor' || u.papel === 'vendedor') && u.ativo !== false)
+    .map(u => ({ ...u, id: u.id || u.usuario }));
+}
+// Briefings direcionados a mim (a agenda do medidor).
+function meusCompromissos() {
+  const eu = norm(SESSAO && SESSAO.usuario);
+  return STORE.getAllOS()
+    .filter(b => b && !b.apagadoEm && !b.avulsa)
+    .filter(b => b.medidorAtribuido && norm(b.medidorAtribuido.usuario) === eu);
+}
 
 function renderInicio(app) {
   document.title = 'Impresilk · Brief de Medição';
@@ -857,6 +878,10 @@ function renderInicio(app) {
     '<span class="icone-porta">🎨</span>' +
     '<span class="nome-porta">DESIGNER</span>' +
     '<span class="desc-porta">Receber briefings e gerar pranchas</span></button>' +
+    '<button class="porta" data-area="medicao">' +
+    '<span class="icone-porta">📍</span>' +
+    '<span class="nome-porta">MEDIÇÃO</span>' +
+    '<span class="desc-porta">Suas visitas do dia: medir e fotografar</span></button>' +
     '</div>' +
     '<a href="#" class="link-admin" id="ini-admin">Painel de controle</a>' +
     '</div></div>';
@@ -2355,6 +2380,82 @@ function filtrarLista(lista) {
   });
 }
 
+/* ══════════════════ Agenda do medidor (compromissos) ══════════════════ */
+// A casa de quem vai à rua. Ele não pensa em "briefing", pensa em "o que eu
+// tenho pra hoje" — por isso a tela é uma AGENDA, agrupada por dia, com o
+// endereço e o telefone virando botão (mapa e WhatsApp), que é o que ele
+// precisa no momento em que está no carro.
+function diaDe(b) {
+  const iso = b.dataVisita || b.dataHora || b.criadoEm;
+  const d = iso ? new Date(iso) : null;
+  return d && !isNaN(d) ? d : null;
+}
+function grupoDoDia(d, concluida) {
+  if (!d) return { k: 'sem', rot: 'Sem data marcada', ordem: 5 };
+  const hoje = new Date(); hoje.setHours(0, 0, 0, 0);
+  const dia = new Date(d); dia.setHours(0, 0, 0, 0);
+  const dif = Math.round((dia - hoje) / 86400000);
+  if (dif < 0) return concluida
+    ? { k: 'feitas', rot: 'Já concluídas', ordem: 4 }
+    : { k: 'atraso', rot: '⚠️ Atrasadas', ordem: 0 };
+  if (dif === 0) return { k: 'hoje', rot: 'Hoje', ordem: 1 };
+  if (dif === 1) return { k: 'amanha', rot: 'Amanhã', ordem: 2 };
+  return { k: 'proximas', rot: 'Próximos dias', ordem: 3 };
+}
+
+function renderAgenda(app) {
+  document.title = 'Minhas visitas';
+  const meus = meusCompromissos();
+  const grupos = {};
+  meus.forEach(b => {
+    const d = diaDe(b);
+    const g = grupoDoDia(d, !!b.visitaConcluida);
+    (grupos[g.k] = grupos[g.k] || { ...g, itens: [] }).itens.push({ b, d });
+  });
+  const ordenados = Object.values(grupos).sort((x, y) => x.ordem - y.ordem);
+  ordenados.forEach(g => g.itens.sort((a, z) => (a.d || 0) - (z.d || 0)));
+  const pendentes = meus.filter(b => !b.visitaConcluida).length;
+
+  app.innerHTML = htmlTopo('Minhas visitas') +
+    '<div class="conteudo">' +
+    '<div class="card"><div class="sub-secao">Olá, ' + esc((SESSAO.nome || '').split(' ')[0]) + '</div>' +
+    (meus.length
+      ? '<p class="dica-campo" style="margin:0">' + (pendentes
+          ? 'Você tem <b>' + pendentes + '</b> visita(s) pra fazer.'
+          : 'Tudo em dia por aqui ✓') + '</p>'
+      : '<p class="dica-campo" style="margin:0">Nenhuma visita direcionada a você ainda. Quando o comercial marcar seu nome numa visita, ela aparece aqui.</p>') +
+    '</div>' +
+    ordenados.map(g =>
+      '<div class="card"><div class="sub-secao">' + esc(g.rot) + ' · ' + g.itens.length + '</div>' +
+      g.itens.map(({ b, d }) => {
+        const hora = b.horaVisita || (d ? d.toLocaleTimeString('pt-BR', { hour: '2-digit', minute: '2-digit' }) : '');
+        const tel = String(b.telefone || '').replace(/\D/g, '');
+        const end = String(b.endereco || '').trim();
+        return '<div class="cartao-visita">' +
+          '<div class="cv-topo">' +
+          '<div><b>' + esc(b.cliente || 'Cliente') + '</b>' +
+          (b.numeroBrief ? ' <span class="dica-campo">Nº ' + esc(b.numeroBrief) + '</span>' : '') +
+          '<div class="dica-campo">' +
+          (d ? fmtData(d.toISOString()) : 'sem data') + (hora ? ' · ' + esc(hora) : '') +
+          (b.tipoMedicao ? ' · ' + esc(b.tipoMedicao) : '') + '</div></div>' +
+          (b.visitaConcluida
+            ? '<span class="selo-ok">✓ feita</span>'
+            : (b.urgente ? '<span class="selo-urgente">URGENTE</span>' : '')) +
+          '</div>' +
+          (end ? '<div class="cv-end">📍 ' + esc(end) + '</div>' : '') +
+          '<div class="cv-acoes">' +
+          '<button class="botao mini" data-abrir="' + esc(b.id) + '">' +
+          (b.visitaConcluida ? 'Ver o que medi' : '📐 Medir agora') + '</button>' +
+          (end ? '<a class="botao mini suave" target="_blank" rel="noopener" href="https://www.google.com/maps/search/?api=1&query=' +
+            encodeURIComponent(end) + '">🗺 Como chegar</a>' : '') +
+          (tel ? '<a class="botao mini suave" target="_blank" rel="noopener" href="https://wa.me/55' + tel + '">💬 Avisar</a>' : '') +
+          '</div></div>';
+      }).join('') + '</div>').join('') +
+    '</div>';
+  ligarTopo();
+  $$('[data-abrir]').forEach(bt => bt.onclick = () => { location.hash = '#/editar/' + bt.dataset.abrir; });
+}
+
 function renderLista(app) {
   document.title = 'Briefings · Brief de Medição';
   const todos = visiveisPraSessao();
@@ -2478,6 +2579,10 @@ function htmlCards(lista) {
       (b.tipoMedicao ? '<span class="badge ' + (b.tipoMedicao === 'Execução' ? 'tipo-execucao' : 'tipo-orcamento') + '">' + esc(b.tipoMedicao) + '</span>' : '') +
       (String(b.osNumero || '').trim() ? '<span class="badge neutro">O.S. ' + esc(b.osNumero) + '</span>' : '<span class="badge sem-os">SEM O.S.</span>') +
       (!rascunho && b.designerAtribuido ? '<span class="badge designer">🎨 ' + esc(b.designerAtribuido.nome) + '</span>' : '') +
+      // Quem está com a visita na rua: sem isto, o comercial direciona e depois
+      // não lembra pra quem, nem sabe se já foi medida.
+      (b.medidorAtribuido ? '<span class="badge medidor">📍 ' + esc(b.medidorAtribuido.nome) +
+        (b.visitaConcluida ? ' ✓' : '') + '</span>' : '') +
       '</div></div>' +
       '</button>'
     );
@@ -2526,10 +2631,19 @@ function renderEditor(app) {
   // Troca de briefing: estado de tela do anterior não vale mais. Zera a ETAPA
   // tambem -- senao o briefing NOVO abria na etapa em que o anterior parou
   // (sempre a 6, a tela de erros de envio), obrigando a voltar 5 vezes.
+  // Medidor só abre o que foi direcionado a ele -- sem isto, um id na barra de
+  // endereço daria acesso ao briefing de qualquer cliente.
+  if (souMedidor() && !(b.medidorAtribuido && norm(b.medidorAtribuido.usuario) === norm(SESSAO.usuario))) {
+    toast('Esta visita não está direcionada a você.', 'erro');
+    location.hash = '#/agenda';
+    return;
+  }
   if (!BRIEF || BRIEF.id !== b.id) {
     ITENS_RECOLHIDOS.clear(); OS_ITENS_DESMARCADOS.clear();
-    ETAPA = 1;
+    // A rua começa na etapa 4: o medidor não mexe em vendedor, O.S. e cliente.
+    ETAPA = souMedidor() ? 4 : 1;
   }
+  if (souMedidor() && ETAPA < 4) ETAPA = 4;
   // Guarda a rolagem: no celular, quase todo toque do editor (marcar superficie,
   // tirar foto, adicionar ponto) redesenha a tela inteira. Se sempre subisse pro
   // topo, o vendedor perdia o lugar dezenas de vezes por visita. Guardamos a
@@ -2547,7 +2661,8 @@ function renderEditor(app) {
     htmlTopo((BRIEF.numeroBrief ? 'Nº ' + padBrief(BRIEF.numeroBrief) + ' · ' : '') + (BRIEF.cliente || 'Novo briefing')) +
     '<main class="miolo"><div class="editor-grade">' +
     '<aside class="sidebar-etapas">' +
-    ETAPAS_DEF.map(e => '<a href="#" data-etapa="' + e.n + '" class="' + (e.n === ETAPA ? 'ativa' : '') + '">' + e.n + '. ' + e.nome + '</a>').join('') +
+    ETAPAS_DEF.filter(e => !souMedidor() || e.n >= 4)
+      .map(e => '<a href="#" data-etapa="' + e.n + '" class="' + (e.n === ETAPA ? 'ativa' : '') + '">' + e.n + '. ' + e.nome + '</a>').join('') +
     '<div style="padding:12px 14px"><span id="salvo-info" class="salvo-info"></span></div>' +
     '</aside>' +
     '<div>' +
@@ -2559,12 +2674,35 @@ function renderEditor(app) {
         (BRIEF.devolucao.motivo ? ':<br>“' + esc(BRIEF.devolucao.motivo) + '”' : '') +
         '<br><span class="dica-campo">Corrija e envie de novo na etapa 6.</span></div>'
       : '') +
-    '<div class="progresso"><div class="passos"><span>Etapa ' + ETAPA + ' de 6</span><span>' + esc(ETAPAS_DEF[ETAPA - 1].nome) + '</span></div>' +
-    '<div class="trilho"><div class="barra" style="width:' + (ETAPA / 6 * 100) + '%"></div></div></div>' +
-    htmlEtapa1() + htmlEtapa2(cfg) + htmlEtapa3() + htmlEtapa4(cfg) + htmlEtapa5() + htmlEtapa6() +
+    // Cabeçalho da rua: o medidor não abre as etapas 1-3, mas PRECISA do que
+    // está nelas para chegar e para ligar. Então o essencial vem para cima.
+    (souMedidor()
+      ? '<div class="card cabeca-rua">' +
+        '<div class="sub-secao" style="margin-top:0">A visita</div>' +
+        '<div class="dupla-dado"><dt>Cliente</dt><dd><b>' + esc(BRIEF.cliente || '—') + '</b></dd></div>' +
+        (BRIEF.responsavel ? '<div class="dupla-dado"><dt>Contato</dt><dd>' + esc(BRIEF.responsavel) + '</dd></div>' : '') +
+        (BRIEF.endereco ? '<div class="dupla-dado"><dt>Endereço</dt><dd>' + esc(BRIEF.endereco) + '</dd></div>' : '') +
+        (BRIEF.pontoReferencia ? '<div class="dupla-dado"><dt>Referência</dt><dd>' + esc(BRIEF.pontoReferencia) + '</dd></div>' : '') +
+        (BRIEF.tipoMedicao ? '<div class="dupla-dado"><dt>Tipo</dt><dd>' + esc(BRIEF.tipoMedicao) +
+          (BRIEF.urgente ? ' · <b style="color:var(--perigo)">URGENTE</b>' : '') + '</dd></div>' : '') +
+        '<div class="cv-acoes" style="margin-top:10px">' +
+        (BRIEF.endereco ? '<a class="botao mini suave" target="_blank" rel="noopener" href="https://www.google.com/maps/search/?api=1&query=' +
+          encodeURIComponent(BRIEF.endereco) + '">🗺 Como chegar</a>' : '') +
+        (BRIEF.telefone ? '<a class="botao mini suave" target="_blank" rel="noopener" href="https://wa.me/55' +
+          String(BRIEF.telefone).replace(/\D/g, '') + '">💬 Falar com o cliente</a>' : '') +
+        '<a class="botao mini fantasma" href="#/agenda">← Minhas visitas</a>' +
+        '</div></div>'
+      : '') +
+    (souMedidor()
+      ? '<div class="progresso"><div class="passos"><span>Etapa ' + (ETAPA - 3) + ' de 3</span><span>' + esc(ETAPAS_DEF[ETAPA - 1].nome) + '</span></div>' +
+        '<div class="trilho"><div class="barra" style="width:' + ((ETAPA - 3) / 3 * 100) + '%"></div></div></div>'
+      : '<div class="progresso"><div class="passos"><span>Etapa ' + ETAPA + ' de 6</span><span>' + esc(ETAPAS_DEF[ETAPA - 1].nome) + '</span></div>' +
+        '<div class="trilho"><div class="barra" style="width:' + (ETAPA / 6 * 100) + '%"></div></div></div>') +
+    (souMedidor() ? '' : htmlEtapa1() + htmlEtapa2(cfg) + htmlEtapa3()) +
+    htmlEtapa4(cfg) + htmlEtapa5() + htmlEtapa6() +
     '</div></div></main>' +
     '<div class="rodape-wizard">' +
-    '<button class="botao fantasma so-mobile" id="btn-voltar"' + (ETAPA === 1 ? ' disabled' : '') + '>← Voltar</button>' +
+    '<button class="botao fantasma so-mobile" id="btn-voltar"' + (ETAPA === (souMedidor() ? 4 : 1) ? ' disabled' : '') + '>← Voltar</button>' +
     // Sem sinal o vendedor não tinha nenhuma confirmação de que gravou; agora a
     // barra de baixo mostra "Salvo às HH:MM" (o desktop já mostrava na lateral).
     '<span class="salvo-rodape" id="salvo-rodape"></span>' +
@@ -2679,6 +2817,17 @@ function htmlEtapa3() {
     '<div class="campo"><label>Nome do estabelecimento (opcional)</label><input id="c-estab" type="text" value="' + esc(BRIEF.estabelecimento) + '"></div>' +
     '<div class="campo"><label>Ponto de referência</label><input id="c-ref" type="text" value="' + esc(BRIEF.pontoReferencia) + '"></div>' +
     '</div>' +
+    // Quem vai medir sai daqui: local definido, pessoa definida. É este campo
+    // que faz o briefing aparecer na agenda dela.
+    '<div class="campo"><label>Quem vai medir</label>' +
+    '<button class="botao suave largo" id="btn-medidor" style="text-align:left">' +
+    (BRIEF.medidorAtribuido ? '📍 ' + esc(BRIEF.medidorAtribuido.nome) : '👤 Escolher quem vai à rua') +
+    '</button>' +
+    '<div class="dica-campo" style="margin-top:6px">' +
+    (BRIEF.medidorAtribuido
+      ? 'Aparece na agenda de ' + esc(BRIEF.medidorAtribuido.nome) + ' com a data e o endereço.'
+      : 'Sem escolher, a visita não entra na agenda de ninguém — quem mede é você mesmo.') +
+    '</div></div>' +
     '<button class="botao fantasma mini" id="btn-ficha-visita">🖨 Ficha de visita desta visita (PDF)</button>' +
     '<div class="dica-campo" style="margin-top:6px">Imprima antes de sair: a ficha tem espaço quadriculado pro desenho a mão. Depois fotografe o desenho na etapa 4.</div>' +
     '</div></section>'
@@ -3120,6 +3269,13 @@ function ligarEditor(cfg) {
   bind('#c-estab', 'estabelecimento');
   bind('#c-ref', 'pontoReferencia');
   const gps = $('#btn-gps'); if (gps) gps.onclick = usarLocalizacao;
+  const btMed = $('#btn-medidor');
+  if (btMed) btMed.onclick = () => abrirEscolhaMedidor(BRIEF.medidorAtribuido, (u) => {
+    BRIEF.medidorAtribuido = u ? { usuario: u.usuario, nome: u.nome, em: new Date().toISOString(), por: SESSAO.nome } : null;
+    salvarRascunho(true);
+    renderApp();
+    toast(u ? 'Visita direcionada para ' + u.nome + ' ✓' : 'Direcionamento removido', 'sucesso');
+  });
   const ficha = $('#btn-ficha-visita'); if (ficha) ficha.onclick = () => exportarFichaVisita(BRIEF);
 
   // Etapa 4
@@ -3583,6 +3739,30 @@ function atribuirDesigner(b, designer) {
 
 // Escolha de designer. `atual` marca o que já está com o briefing;
 // aoEscolher recebe o usuário escolhido (ou null pra "qualquer um").
+function abrirEscolhaMedidor(atual, aoEscolher) {
+  const lista = medidoresAtivos();
+  const m = abrirModal(
+    '<h3>Quem vai medir?</h3>' +
+    '<p class="dica-campo">A visita entra na agenda da pessoa, com a data, o endereço e o telefone do contato.</p>' +
+    '<div class="lista-escolha" style="margin-top:10px">' +
+    (lista.length ? lista.map(u =>
+      '<button class="opcao-briefing" data-medidor="' + esc(u.usuario) + '">' +
+      '<b>' + esc(u.nome) + (atual && norm(atual.usuario) === norm(u.usuario) ? ' · já está com ele' : '') + '</b>' +
+      '<span class="dica-campo">' + esc(u.papel) + ' · ' + esc(u.usuario) + '</span></button>').join('')
+      : '<div class="aviso amarelo">Ninguém com acesso de medição ainda. A gestão cria em Acessos.</div>') +
+    '<button class="opcao-briefing" data-medidor=""><b>Eu mesmo vou medir</b>' +
+    '<span class="dica-campo">não entra na agenda de ninguém</span></button>' +
+    '</div>' +
+    '<div class="acoes-modal"><button class="botao fantasma btn-cancelar">Cancelar</button></div>'
+  );
+  $('.btn-cancelar', m).onclick = () => m.remove();
+  $$('[data-medidor]', m).forEach(bt => bt.onclick = () => {
+    const u = lista.find(x => norm(x.usuario) === norm(bt.dataset.medidor)) || null;
+    m.remove();
+    aoEscolher(u);
+  });
+}
+
 function abrirEscolhaDesigner(titulo, atual, aoEscolher) {
   const lista = designersAtivos();
   const m = abrirModal(

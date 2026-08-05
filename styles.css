@@ -640,3 +640,18 @@ input:focus, select:focus, textarea:focus { outline: none; border-color: var(--i
 @media (min-width: 1200px) {
   .grade-fotos { grid-template-columns: repeat(4, 1fr); }
 }
+
+/* ── agenda do medidor ──────────────────────────────────────────────────── */
+.cartao-visita {
+  border: 1px solid var(--linha, #e3e4ef); border-radius: 14px;
+  padding: 13px 14px; margin-bottom: 10px; background: #fff;
+}
+.cv-topo { display: flex; align-items: flex-start; justify-content: space-between; gap: 10px; }
+.cv-end { margin: 8px 0 4px; font-size: 14px; color: var(--cinza, #5b5b74); }
+.cv-acoes { display: flex; gap: 8px; flex-wrap: wrap; margin-top: 8px; }
+.cv-acoes .botao { text-decoration: none; }
+.selo-ok { background: #e7f7f0; color: #17a673; border-radius: 999px; padding: 3px 10px; font-size: 12px; font-weight: 700; white-space: nowrap; }
+.selo-urgente { background: #fdecee; color: #d43d51; border-radius: 999px; padding: 3px 10px; font-size: 12px; font-weight: 700; white-space: nowrap; }
+.badge.medidor { background: #eef0ff; color: #2626b8; }
+/* cabeçalho da rua: o que o medidor precisa antes de medir */
+.cabeca-rua { border-left: 5px solid var(--azul, #3b3bec); margin-bottom: 12px; }
