@@ -2387,9 +2387,11 @@ function filtrarLista(lista) {
 // tenho pra hoje" — por isso a tela é uma AGENDA, agrupada por dia, com o
 // endereço e o telefone virando botão (mapa e WhatsApp), que é o que ele
 // precisa no momento em que está no carro.
+// A data E a hora da visita moram no MESMO campo (`dataHora`) — é ele que a
+// etapa 2 preenche. Inventar `dataVisita` deixaria a agenda lendo um campo que
+// o app nunca grava, e tudo cairia em "sem data".
 function diaDe(b) {
-  const iso = b.dataVisita || b.dataHora || b.criadoEm;
-  const d = iso ? new Date(iso) : null;
+  const d = b.dataHora ? new Date(b.dataHora) : null;
   return d && !isNaN(d) ? d : null;
 }
 function grupoDoDia(d, concluida) {
@@ -2430,7 +2432,7 @@ function renderAgenda(app) {
     ordenados.map(g =>
       '<div class="card"><div class="sub-secao">' + esc(g.rot) + ' · ' + g.itens.length + '</div>' +
       g.itens.map(({ b, d }) => {
-        const hora = b.horaVisita || (d ? d.toLocaleTimeString('pt-BR', { hour: '2-digit', minute: '2-digit' }) : '');
+        const hora = d ? d.toLocaleTimeString('pt-BR', { hour: '2-digit', minute: '2-digit' }) : '';
         const tel = String(b.telefone || '').replace(/\D/g, '');
         const end = String(b.endereco || '').trim();
         return '<div class="cartao-visita">' +
