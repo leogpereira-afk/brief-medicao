@@ -40,11 +40,14 @@ self.addEventListener('fetch', e => {
   if (req.method !== 'GET') return;
   const url = new URL(req.url);
 
-  // Nunca cachear a API — o store.js já trata offline pela fila.
-  // O backend agora é o Supabase; a regra do Netlify vira letra morta quando o
-  // site velho morrer, mas fica até lá (durante a transição os dois respondem).
+  // Nunca cachear a API: o dado tem que ser o do momento (offline é a fila do
+  // store.js que resolve). O backend é o Supabase.
+  //
+  // A regra do Netlify saiu em 04/08/2026: os sites do Netlify foram apagados
+  // e este app passou a morar no GitHub Pages, então o caminho
+  // /.netlify/functions/ não existe mais em lugar nenhum. Linha morta em
+  // arquivo de cache confunde: dá a impressão de que ainda há um backend lá.
   if (url.hostname.endsWith('supabase.co')) return;
-  if (url.pathname.includes('/.netlify/functions/')) return;
 
   // Network-first: online pega a versão nova e atualiza o cache; offline cai no cache.
   e.respondWith((async () => {
