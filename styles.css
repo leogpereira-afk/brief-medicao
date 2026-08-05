@@ -111,6 +111,15 @@ a { color: var(--indigo); }
   -webkit-tap-highlight-color: transparent;
 }
 .nav-topo a:hover { background: rgba(255,255,255,.22); }
+/* Quantas visitas ainda faltam fazer. Fica no atalho da agenda pra quem não é
+   medidor de carreira (vendedor, gestão) e por isso não mora nessa tela. */
+.marcador-nav {
+  background: var(--perigo, #d92d20); color: #fff; font-weight: 700;
+  font-size: .72rem; line-height: 1; min-width: 18px; height: 18px;
+  border-radius: 999px; display: inline-flex; align-items: center;
+  justify-content: center; padding: 0 5px;
+}
+.nav-topo a.ativo .marcador-nav { background: var(--perigo, #d92d20); }
 /* O item ativo é sólido: no fundo indigo, um realce translúcido some. */
 .nav-topo a.ativo {
   background: #fff; color: var(--indigo-escuro); font-weight: 600;

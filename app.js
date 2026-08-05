@@ -653,6 +653,13 @@ function htmlTopo(tituloTela) {
     (souMedidor()
       ? '<a href="#/agenda" class="' + (ROTA.nome === 'agenda' ? 'ativo' : '') + '">📍 Minhas visitas</a>'
       : '<a href="#/lista" class="' + (ROTA.nome === 'lista' ? 'ativo' : '') + '">📋 Briefings</a>') +
+    // Quem não é medidor mas tem visita marcada no nome (vendedor que vai medir,
+    // gestão) só descobria isso abrindo briefing por briefing. O atalho aparece
+    // sozinho quando existe compromisso, e some quando não existe.
+    (!souMedidor() && SESSAO && AREAS.medicao.papeis.includes(SESSAO.papel) && contarCompromissos()
+      ? '<a href="#/agenda" class="' + (ROTA.nome === 'agenda' ? 'ativo' : '') + '">📍 Minhas visitas' +
+        '<span class="marcador-nav">' + contarCompromissos() + '</span></a>'
+      : '') +
     (podeCriar() ? '<a href="#/novo" class="' + (ROTA.nome === 'novo' || ROTA.nome === 'editor' ? 'ativo' : '') + '">➕ Novo</a>' : '') +
     (podeVerArquivos() ? '<a href="#/arquivos" class="' + (ROTA.nome === 'arquivos' ? 'ativo' : '') + '">🖼 Arquivos</a>' : '') +
     (podeUsarLayout() ? '<a href="#/layout" class="' + (ROTA.nome === 'layout' ? 'ativo' : '') + '">🗂 Layout</a>' : '') +
@@ -839,7 +846,11 @@ const AREAS = {
   designer:  { rotulo: 'Designer',  papeis: ['designer', 'admin'], destino: '#/lista' },
   // Quem vai à rua medir. A casa dele é a AGENDA (o que tem pra hoje), não a
   // lista de briefings -- ele pensa em compromisso, não em cadastro.
-  medicao:   { rotulo: 'Medição',   papeis: ['medidor', 'admin'],  destino: '#/agenda' },
+  // `vendedor` entra aqui de propósito: a etapa 3 oferece vendedores na lista de
+  // quem vai medir (e é comum o próprio vendedor voltar pra medir). Sem isso, a
+  // visita era direcionada a ele e ele não tinha porta nenhuma pra enxergar —
+  // atribuição que não chega em ninguém é pior que atribuição nenhuma.
+  medicao:   { rotulo: 'Medição',   papeis: ['medidor', 'vendedor', 'admin'], destino: '#/agenda' },
   admin:     { rotulo: 'Painel de controle', papeis: ['admin'],    destino: '#/admin' }
 };
 
@@ -855,6 +866,11 @@ function meusCompromissos() {
   return STORE.getAllOS()
     .filter(b => b && !b.apagadoEm && !b.avulsa)
     .filter(b => b.medidorAtribuido && norm(b.medidorAtribuido.usuario) === eu);
+}
+// Só as que ainda faltam fazer — o crachá no menu não pode contar as concluídas,
+// senão ele nunca zera e vira enfeite.
+function contarCompromissos() {
+  return meusCompromissos().filter(b => !b.visitaConcluida).length;
 }
 
 function renderInicio(app) {
@@ -2326,7 +2342,7 @@ function pendencias(b) {
   if (!String(b.telefone || '').trim()) add('Telefone do cliente', 2);
   if (!b.tipoMedicao) add('Tipo de medição (Orçamento ou Execução)', 2);
   if (!(b.itens || []).length) add('Pelo menos um item medido', 4);
-  if (!b.visitaConcluida) add('Marcar "Visita concluída" na etapa 4', 4);
+  if (!b.visitaConcluida) add('Marcar "Visita concluída" na etapa ' + (souMedidor() ? '1' : '4'), 4);
   const cfg = STORE.getCFG();
   (b.itens || []).forEach((it, i) => {
     const n = 'Item ' + (i + 1) + (nomeItem(it) ? ' (' + nomeItem(it) + ')' : '');
@@ -2339,7 +2355,10 @@ function pendencias(b) {
       }
     });
   });
-  return p;
+  // O medidor não abre as etapas 1 a 3. Listar "falta o telefone do cliente"
+  // pra ele é cobrar uma coisa que ele não tem como resolver — e o atalho "Ir →"
+  // apontaria pra uma etapa que nem existe na tela dele.
+  return souMedidor() ? p.filter(x => x.etapa >= 4) : p;
 }
 // Só as frases, pros lugares que não vão pular pra etapa nenhuma.
 function pendenciasTexto(b) { return pendencias(b).map(x => x.texto); }
@@ -2390,9 +2409,24 @@ function filtrarLista(lista) {
 // A data E a hora da visita moram no MESMO campo (`dataHora`) — é ele que a
 // etapa 2 preenche. Inventar `dataVisita` deixaria a agenda lendo um campo que
 // o app nunca grava, e tudo cairia em "sem data".
+//
+// Mas `dataHora` é o dia em que o COMERCIAL esteve no cliente, e quase sempre já
+// passou. O dia em que o medidor tem que ir à rua é a "Data da medida"
+// (`dataMedicao`). Lendo só `dataHora`, a visita marcada pra semana que vem
+// aparecia em "Hoje" e no dia seguinte virava "⚠️ Atrasada" sem nunca ter
+// atrasado — e a agenda perdia a única coisa que ela promete.
 function diaDe(b) {
-  const d = b.dataHora ? new Date(b.dataHora) : null;
+  const bruto = b.dataMedicao || b.dataHora;
+  const d = bruto ? new Date(bruto) : null;
   return d && !isNaN(d) ? d : null;
+}
+// A hora só existe no campo da visita. `dataMedicao` é gravada com 12:00 fixo
+// (etapa 2 só pede o dia), então mostrá-la seria anunciar hora marcada que
+// ninguém combinou — o medidor chegaria meio-dia num serviço das 8h.
+function horaDe(b) {
+  if (b.dataMedicao && b.dataHora && diaLocal(b.dataMedicao) !== diaLocal(b.dataHora)) return '';
+  const d = b.dataHora ? new Date(b.dataHora) : null;
+  return d && !isNaN(d) ? d.toLocaleTimeString('pt-BR', { hour: '2-digit', minute: '2-digit' }) : '';
 }
 function grupoDoDia(d, concluida) {
   if (!d) return { k: 'sem', rot: 'Sem data marcada', ordem: 5 };
@@ -2432,7 +2466,7 @@ function renderAgenda(app) {
     ordenados.map(g =>
       '<div class="card"><div class="sub-secao">' + esc(g.rot) + ' · ' + g.itens.length + '</div>' +
       g.itens.map(({ b, d }) => {
-        const hora = d ? d.toLocaleTimeString('pt-BR', { hour: '2-digit', minute: '2-digit' }) : '';
+        const hora = horaDe(b);
         const tel = String(b.telefone || '').replace(/\D/g, '');
         const end = String(b.endereco || '').trim();
         return '<div class="cartao-visita">' +
@@ -2665,7 +2699,10 @@ function renderEditor(app) {
     htmlTopo((BRIEF.numeroBrief ? 'Nº ' + padBrief(BRIEF.numeroBrief) + ' · ' : '') + (BRIEF.cliente || 'Novo briefing')) +
     '<main class="miolo"><div class="editor-grade">' +
     '<aside class="sidebar-etapas">' +
-    ETAPAS_DEF.filter(e => !souMedidor() || e.n >= 4)
+    // Pro medidor a etapa 6 não é "revisão e envio" (ele não envia): é o
+    // fechamento da visita dele.
+    ETAPAS_DEF.map(e => (souMedidor() && e.n === 6 ? { ...e, nome: 'Fechar a visita' } : e))
+      .filter(e => !souMedidor() || e.n >= 4)
       .map(e => '<a href="#" data-etapa="' + e.n + '" class="' + (e.n === ETAPA ? 'ativa' : '') + '">' + e.n + '. ' + e.nome + '</a>').join('') +
     '<div style="padding:12px 14px"><span id="salvo-info" class="salvo-info"></span></div>' +
     '</aside>' +
@@ -3150,16 +3187,30 @@ function htmlEtapa6() {
     (semOS ? '<div class="aviso amarelo">Este briefing vai SEM número de O.S. Dá pra vincular depois, não trava o envio.</div>' : '') +
     (BRIEF.tipoMedicao === 'Execução' ? '<div class="aviso vermelho">Medição de EXECUÇÃO: estas medidas vão pra produção. Confira duas vezes.</div>' : '') +
     (p.length
-      ? '<div class="aviso vermelho" style="font-weight:400"><b>Falta resolver antes de enviar:</b>' +
+      ? '<div class="aviso vermelho" style="font-weight:400"><b>Falta resolver' +
+        (souMedidor() ? ' na medição' : ' antes de enviar') + ':</b>' +
         '<div class="pendencias">' + p.map((x, i) =>
           '<button class="pend-atalho" data-pend="' + i + '" data-etapa="' + x.etapa + '"' +
           (x.itemId ? ' data-item="' + esc(x.itemId) + '"' : '') + '>' +
           '<span>' + esc(x.texto) + '</span><span class="ir">Ir →</span></button>').join('') + '</div></div>'
-      : '<div class="aviso verde">Tudo certo pra enviar.</div>') +
-    // O botão NUNCA fica só apagado sem resposta: quando falta algo, ele leva
-    // ao primeiro pendente em vez de não fazer nada ao toque.
-    '<button class="botao largo" id="btn-enviar">📨 Enviar pro design</button>' +
-    '<button class="botao largo fantasma" id="btn-descartar" style="margin-top:10px">Descartar rascunho</button>' +
+      : souMedidor() ? '' : '<div class="aviso verde">Tudo certo pra enviar.</div>') +
+    // O briefing é do comercial: ele abriu, ele conhece o combinado com o
+    // cliente e é ele que decide quando o design assume. O medidor entrega a
+    // medição e sai — se ele enviasse, mandaria pro design um briefing cujas
+    // etapas 1 a 3 ele nem enxerga; se ele descartasse, jogaria fora trabalho
+    // de outra pessoa (recuperável na lixeira, mas o comercial só descobre
+    // quando o cliente cobra).
+    (souMedidor()
+      ? (BRIEF.visitaConcluida
+          ? '<div class="aviso verde">Medição entregue ✓ O comercial recebe e envia pro design. ' +
+            'Se lembrar de algo, dá pra reabrir e completar até ele enviar.</div>'
+          : '<div class="aviso amarelo">Quando terminar, marque <b>Visita concluída</b> na etapa 1. ' +
+            'O comercial só vê que a medição ficou pronta depois disso.</div>') +
+        '<a class="botao largo" href="#/agenda">📍 Voltar pras minhas visitas</a>'
+      // O botão NUNCA fica só apagado sem resposta: quando falta algo, ele leva
+      // ao primeiro pendente em vez de não fazer nada ao toque.
+      : '<button class="botao largo" id="btn-enviar">📨 Enviar pro design</button>' +
+        '<button class="botao largo fantasma" id="btn-descartar" style="margin-top:10px">Descartar rascunho</button>') +
     '</div></section>'
   );
 }
@@ -3276,6 +3327,15 @@ function ligarEditor(cfg) {
   const btMed = $('#btn-medidor');
   if (btMed) btMed.onclick = () => abrirEscolhaMedidor(BRIEF.medidorAtribuido, (u) => {
     BRIEF.medidorAtribuido = u ? { usuario: u.usuario, nome: u.nome, em: new Date().toISOString(), por: SESSAO.nome } : null;
+    // "Quem mediu" nasce com o nome do vendedor (etapa 2). Direcionar a visita
+    // pra outra pessoa e deixar esse campo parado faz o PDF que vai pro design
+    // dizer que o comercial mediu — o designer liga pra pessoa errada quando
+    // tem dúvida na cota. Só mexe se ainda estiver com o valor padrão: se o
+    // vendedor digitou um nome à mão, ele mandou.
+    const padrao = !BRIEF.quemMediu || norm(BRIEF.quemMediu) === norm(BRIEF.vendedor || '') ||
+      (BRIEF.medidorAnterior && norm(BRIEF.quemMediu) === norm(BRIEF.medidorAnterior));
+    if (padrao) BRIEF.quemMediu = u ? u.nome : (BRIEF.vendedor || '');
+    BRIEF.medidorAnterior = u ? u.nome : '';
     salvarRascunho(true);
     renderApp();
     toast(u ? 'Visita direcionada para ' + u.nome + ' ✓' : 'Direcionamento removido', 'sucesso');
@@ -3687,7 +3747,11 @@ async function buscarOS(botao) {
 // Fecho da visita: confirma quem concluiu; a data e a hora são do relógio,
 // não digitadas (evita carimbo "ajustado" depois).
 function abrirConcluirVisita() {
-  const sugerido = BRIEF.quemMediu || BRIEF.vendedor || (SESSAO && SESSAO.nome) || '';
+  // Quem está concluindo é quem está logado AGORA — não o dono do briefing.
+  // A ordem antiga (quemMediu → vendedor → sessão) fazia o medidor concluir a
+  // visita e o app carimbar o nome do comercial: registro de prova mentindo,
+  // e ninguém repara porque o campo já vem preenchido e parece certo.
+  const sugerido = (SESSAO && SESSAO.nome) || BRIEF.quemMediu || BRIEF.vendedor || '';
   const agora = new Date();
   // Itens incompletos podem estar recolhidos e passar despercebidos
   const faltando = BRIEF.itens.filter(i => !itemCompleto(i));
