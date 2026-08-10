@@ -329,7 +329,12 @@ const STORE = (() => {
         : '/.netlify/functions/' + fn; // volta ao Netlify se o config for antigo
       const res = await fetch(url, {
         method:  'POST',
-        headers: { 'Content-Type': 'application/json', 'x-token': TOKEN },
+        // Crachá lido na hora da chamada (muda quando a pessoa entra ou sai).
+        headers: Object.assign(
+          { 'Content-Type': 'application/json' },
+          (typeof AUTH !== 'undefined' && AUTH.cracha && AUTH.cracha())
+            ? { authorization: 'Bearer ' + AUTH.cracha() } : {}
+        ),
         body:    JSON.stringify(body),
         signal:  ctrl.signal
       });

@@ -22,6 +22,7 @@ const AUTH = (() => {
   const pegar = () => localStorage.getItem(K_TOKEN) || '';
   const guardar = t => { if (t) localStorage.setItem(K_TOKEN, t); };
   const esquecer = () => localStorage.removeItem(K_TOKEN);
+  // O crachá agora também autoriza os DADOS (brief-sync), não só a tela.
 
   async function chamar(acao, corpo, comCracha) {
     const cab = { 'Content-Type': 'application/json' };
@@ -38,6 +39,7 @@ const AUTH = (() => {
 
   return {
     temCracha: () => !!pegar(),
+    cracha: pegar,
     esquecer,
 
     async login(usuario, senha) {

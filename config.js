@@ -2,7 +2,14 @@
 // (Project settings → Environment variables → TOKEN = <sua-senha-secreta>).
 // Atenção: este token vai para o navegador — é autenticação LEVE (barra curiosos,
 // não ataque dirigido). Dados muito sensíveis pedem login validado no servidor.
-const TOKEN = 'e745b3c735b68e76e0ed680f5842f2d19f52b8aad902b856';
+// ⚠️ NÃO coloque token nenhum neste arquivo: ele é servido ao navegador e
+// qualquer pessoa lê no código-fonte da página.
+//
+// Até 05/08/2026 havia aqui um `const TOKEN = '...'`, e era ele que autorizava
+// os dados no servidor — as medições, os endereços e os telefones dos clientes
+// saíam sem login para quem abrisse o código-fonte. Quem autoriza agora é o
+// CRACHÁ da pessoa (store.js), assinado por um segredo que só o servidor
+// conhece. O token antigo foi girado.
 
 // Backend: Supabase (Edge Functions). Antes eram Netlify Functions em
 // /.netlify/functions/. O contrato das ações é o MESMO — só mudou o endereço.
