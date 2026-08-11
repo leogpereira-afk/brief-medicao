@@ -206,6 +206,38 @@ async function buscarNoPCP(numero: string) {
   return null;
 }
 
+
+// Confere o cracha da pessoa: assinatura (HS256 com o EQUIPE_JWT_SECRET),
+// validade e de QUAL sistema ele e -- cracha de outro sistema nao abre este.
+const JWT_SECRET_EQUIPE = Deno.env.get("EQUIPE_JWT_SECRET") ?? "";
+async function lerCracha(token: string): Promise<any | null> {
+  if (!JWT_SECRET_EQUIPE || !token) return null;
+  const partes = token.split(".");
+  if (partes.length !== 3) return null;
+  try {
+    const enc = new TextEncoder();
+    const chave = await crypto.subtle.importKey(
+      "raw", enc.encode(JWT_SECRET_EQUIPE), { name: "HMAC", hash: "SHA-256" }, false, ["verify"]);
+    const b64url = (t: string) => {
+      t = t.replace(/-/g, "+").replace(/_/g, "/");
+      while (t.length % 4) t += "=";
+      const bin = atob(t);
+      const out = new Uint8Array(bin.length);
+      for (let i = 0; i < bin.length; i++) out[i] = bin.charCodeAt(i);
+      return out;
+    };
+    const ok = await crypto.subtle.verify(
+      "HMAC", chave, b64url(partes[2]), enc.encode(`${partes[0]}.${partes[1]}`));
+    if (!ok) return null;
+    const p = JSON.parse(new TextDecoder().decode(b64url(partes[1])));
+    if (typeof p.exp === "number" && p.exp < Math.floor(Date.now() / 1000)) return null;
+    if (p.sis !== "brief") return null;
+    return p;
+  } catch {
+    return null;
+  }
+}
+
 Deno.serve(async (req: Request) => {
   if (req.method === "OPTIONS") return new Response("ok", { headers: CORS });
   if (req.method !== "POST") return resp({ error: "Method not allowed" }, 405);
@@ -217,8 +249,16 @@ Deno.serve(async (req: Request) => {
     return resp({ error: "JSON inválido" }, 400);
   }
 
+  /* DUAS FORMAS DE ENTRAR, como no brief-sync.
+     Antes so o x-token valia -- e ele vinha do config.js, que era publico. Ao
+     tirar o segredo do bundle (o app passou a mandar so o cracha), esta porta
+     ficou fechada para as PESSOAS: a busca de O.S. respondia 401 para todo
+     mundo. O x-token continua, agora so para maquina. */
+  const m = String(req.headers.get("authorization") ?? "").match(/^Bearer\s+(.+)$/i);
+  const cracha = m ? await lerCracha(m[1]) : null;
   const token = req.headers.get("x-token") ?? body.token;
-  if (!TOKEN || token !== TOKEN) return resp({ error: "Não autorizado" }, 401);
+  const ehMaquina = !!TOKEN && token === TOKEN;
+  if (!cracha && !ehMaquina) return resp({ error: "Entre no sistema.", semSessao: true }, 401);
 
   try {
     if (body.action === "salvarConfig") {
