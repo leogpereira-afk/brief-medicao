@@ -238,6 +238,44 @@ async function lerCracha(token: string): Promise<any | null> {
   }
 }
 
+
+/* ---------------------------------------------------------------- revogacao
+   "Esse cracha ainda vale?" -- a pergunta que ESTA porta nao fazia.
+   O cracha e um JWT de 30 dias (12h no Painel) guardado no aparelho: assinatura,
+   validade e sistema conferiam, e mais nada. Desativar alguem na tela de Acessos
+   nao fechava porta nenhuma deste lado ate o cracha vencer.
+
+   A regra mora no BANCO (public.acesso_revogado), e nao num arquivo aqui: as
+   portas de dados estao em CINCO repositorios e cada function empacota o proprio
+   codigo -- um _shared/revogacao.ts viraria doze copias envelhecendo caladas,
+   que e a doenca que esta semana perseguiu. O banco os oito ja dividem.
+
+   Cache de 60s por pessoa: uma consulta por minuto, nao por request.
+   Banco fora do ar ACEITA e nao guarda no cache -- trancar a casa inteira por
+   causa de uma consulta que falhou e pior do que um cracha durar mais um pouco. */
+const CACHE_REVOG = new Map<string, { ate: number; revogado: boolean }>();
+async function crachaRevogado(sb: any, sistema: string, cracha: any): Promise<boolean> {
+  const sub = String(cracha?.sub ?? "").trim();
+  if (!sub) return false;
+  const papel = String(cracha?.papel ?? "");
+  const chave = `${sistema}:${papel}:${sub}`;
+  const agora = Date.now();
+  const emCache = CACHE_REVOG.get(chave);
+  if (emCache && emCache.ate > agora) return emCache.revogado;
+  try {
+    const { data, error } = await sb.rpc("acesso_revogado", {
+      p_sistema: sistema, p_sub: sub, p_papel: papel,
+    });
+    if (error) throw new Error(error.message);
+    const revogado = data === true;
+    CACHE_REVOG.set(chave, { ate: agora + 60_000, revogado });
+    return revogado;
+  } catch (e) {
+    console.error("[revogacao] indisponivel:", (e as Error)?.message);
+    return false;
+  }
+}
+
 Deno.serve(async (req: Request) => {
   if (req.method === "OPTIONS") return new Response("ok", { headers: CORS });
   if (req.method !== "POST") return resp({ error: "Method not allowed" }, 405);
@@ -256,6 +294,9 @@ Deno.serve(async (req: Request) => {
      mundo. O x-token continua, agora so para maquina. */
   const m = String(req.headers.get("authorization") ?? "").match(/^Bearer\s+(.+)$/i);
   const cracha = m ? await lerCracha(m[1]) : null;
+  if (cracha && await crachaRevogado(sb, "brief", cracha)) {
+    return resp({ error: "Seu acesso ao sistema foi encerrado. Fale com a gestão.", semSessao: true }, 401);
+  }
   const token = req.headers.get("x-token") ?? body.token;
   const ehMaquina = !!TOKEN && token === TOKEN;
   if (!cracha && !ehMaquina) return resp({ error: "Entre no sistema.", semSessao: true }, 401);
