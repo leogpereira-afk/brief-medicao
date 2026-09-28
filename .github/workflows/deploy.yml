@@ -4,7 +4,7 @@ name: Deploy (GitHub Pages)
 # brief-sync / brief-mubisys), chamado direto pelo navegador.
 #
 # App vanilla: nao ha build. O passo abaixo so separa o que e SITE do que e
-# ferramenta de repositorio (netlify/, supabase/, scripts/), para nao publicar
+# ferramenta de repositorio (supabase/, scripts/), para nao publicar
 # codigo de servidor junto com a pagina.
 #
 # Nao precisa gerar 404.html: o Brief navega por # (hash), entao o Pages nunca
@@ -36,8 +36,6 @@ jobs:
             --exclude dist/ \
             --exclude .git/ \
             --exclude .github/ \
-            --exclude .netlify/ \
-            --exclude netlify/ \
             --exclude supabase/ \
             --exclude scripts/ \
             --exclude _audit_tmp/ \

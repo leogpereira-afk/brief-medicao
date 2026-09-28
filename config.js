@@ -1,7 +1,3 @@
-// TOKEN — mesma string deve estar aqui E como variável de ambiente TOKEN no Netlify
-// (Project settings → Environment variables → TOKEN = <sua-senha-secreta>).
-// Atenção: este token vai para o navegador — é autenticação LEVE (barra curiosos,
-// não ataque dirigido). Dados muito sensíveis pedem login validado no servidor.
 // ⚠️ NÃO coloque token nenhum neste arquivo: ele é servido ao navegador e
 // qualquer pessoa lê no código-fonte da página.
 //
@@ -11,8 +7,7 @@
 // CRACHÁ da pessoa (store.js), assinado por um segredo que só o servidor
 // conhece. O token antigo foi girado.
 
-// Backend: Supabase (Edge Functions). Antes eram Netlify Functions em
-// /.netlify/functions/. O contrato das ações é o MESMO — só mudou o endereço.
+// Backend: Supabase (Edge Functions).
 //
 // Os nomes levam prefixo "brief-" porque o projeto do Supabase é compartilhado
 // com o RH, que ficou com os nomes crus: uma function chamada "sync" seria a

@@ -1,17 +1,18 @@
 // ============================================================================
-// brief-mubisys — Edge Function (substitui netlify/functions/mubisys.js)
+// brief-mubisys — Edge Function da busca de O.S. do Brief
 //
 // Busca uma O.S pelo numero para preencher o briefing sozinho. Ordem:
 //   1. API do Mubisys direto (credenciais cadastradas no Painel de Controle)
 //   2. App PCP, que ja importa as O.S do Mubisys de hora em hora
 //   3. Nada encontrado -> o app cai na digitacao manual
 //
-// De-para: store "integracoes" chave "mubisys" -> brief_meta chave "mubisys".
+// Credenciais do Mubisys: brief_meta chave "mubisys".
 //
-// ATENCAO (dependencia cruzada): o PCP ainda esta no Netlify. BRIEF_PCP_URL
-// aponta para la. Quando o PCP migrar, este segredo TEM que ser atualizado --
-// senao o segundo caminho de busca morre calado e o vendedor volta a digitar
-// tudo na mao sem ninguem perceber.
+// O PCP (pcp-sync) mora NESTE projeto do Supabase, entao o segundo caminho
+// chama o endereco dele direto, com o PCP_TOKEN que a propria pcp-sync confere.
+// Antes havia uma copia do endereco e da senha em BRIEF_PCP_URL/BRIEF_PCP_TOKEN;
+// as copias desencontraram (em 23/09/2026 a busca voltou 401) e o segundo
+// caminho morria calado. Sem copia, nao ha o que desencontrar.
 //
 // verify_jwt = false: o preflight CORS chega sem token. A autorizacao e feita
 // aqui dentro, comparando x-token com BRIEF_TOKEN (o mesmo do brief-sync).
@@ -22,8 +23,8 @@ import { createClient } from "https://esm.sh/@supabase/supabase-js@2.45.0";
 const SUPABASE_URL = Deno.env.get("SUPABASE_URL")!;
 const SERVICE_KEY = Deno.env.get("SUPABASE_SERVICE_ROLE_KEY")!;
 const TOKEN = Deno.env.get("BRIEF_TOKEN") ?? "";
-const PCP_URL = Deno.env.get("BRIEF_PCP_URL") ?? "";
-const PCP_TOKEN = Deno.env.get("BRIEF_PCP_TOKEN") ?? "";
+const PCP_URL = `${SUPABASE_URL}/functions/v1/pcp-sync`;
+const PCP_TOKEN = Deno.env.get("PCP_TOKEN") ?? "";
 const DEFAULT_BASE = "https://api.mubisys.com/api";
 
 const sb = createClient(SUPABASE_URL, SERVICE_KEY, { auth: { persistSession: false } });
@@ -172,14 +173,9 @@ function mapearMubisys(o: any) {
 }
 
 async function buscarNoPCP(numero: string) {
-  const base = PCP_URL.replace(/\/+$/, "");
-  // BRIEF_PCP_URL pode ser o site antigo (Netlify: monta o caminho da function)
-  // ou o endpoint NOVO completo (Edge Function: usa como esta). Aceitar os dois
-  // e o que permitiu trocar o secret na virada sem tocar em codigo de novo.
-  const url = base.includes("/functions/v1/") ? base : base + "/.netlify/functions/os";
   let after: unknown = null;
   for (let guard = 0; guard < 50; guard++) {
-    const r = await fetchTimeout(url, {
+    const r = await fetchTimeout(PCP_URL, {
       method: "POST",
       headers: { "Content-Type": "application/json", "x-token": PCP_TOKEN },
       body: JSON.stringify(after != null ? { action: "list", after } : { action: "list" }),

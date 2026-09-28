@@ -1,9 +1,6 @@
 {
   "name": "brief-medicao",
   "version": "1.0.0",
-  "description": "Brief de Medição Impresilk, offline-first com Netlify Functions + Blobs (padrão Impresilk)",
-  "private": true,
-  "dependencies": {
-    "@netlify/blobs": "^10.7.9"
-  }
+  "description": "Brief de Medição Impresilk, offline-first com Supabase (Edge Functions + Postgres) e tela no GitHub Pages (padrão Impresilk)",
+  "private": true
 }
