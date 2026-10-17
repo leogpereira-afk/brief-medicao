@@ -724,3 +724,10 @@ button:focus-visible,a:focus-visible,summary:focus-visible,[role="button"]:focus
 .vendedores-lista { gap: 8px; margin-bottom: 16px; flex-wrap: wrap; }
 .vendedores-rotulo { font-size: .85rem; font-weight: 600; align-self: center; margin-right: 4px; }
 .vendedores-lista .chip { min-height: 40px; }
+
+/* Finalização diretamente na lista, sem botões aninhados. */
+.brief-linha{display:flex;align-items:center;gap:16px;background:var(--card,#fff);border:1px solid #e5e5ef;border-radius:16px;margin-bottom:12px;padding-right:16px;overflow:hidden}
+.brief-linha .cartao-brief{flex:1;min-width:0;margin:0;box-shadow:none;border:0;border-radius:0}
+.brief-baixa{display:flex;gap:8px;flex-wrap:wrap;justify-content:flex-end}.brief-baixa button{min-height:44px;white-space:nowrap}
+.brief-resultado{max-width:300px;padding:12px;font-size:14px}.brief-resultado small{display:block;margin-top:6px}.brief-resultado p{overflow-wrap:anywhere}.brief-arquivo{margin-bottom:16px}
+@media(max-width:700px){.brief-linha{flex-wrap:wrap;padding:0}.brief-linha .cartao-brief{flex-basis:100%}.brief-baixa,.brief-resultado{padding:0 16px 16px;max-width:100%}.brief-baixa{width:100%}}

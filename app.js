@@ -325,7 +325,7 @@ const ITENS_RECOLHIDOS = new Set();
 // a cada redesenho da tela).
 const OS_ITENS_DESMARCADOS = new Set();
 function filtrosZerados() {
-  return { texto: '', os: '', de: '', ate: '', deBr: '', ateBr: '', status: '', vendedor: '', tipo: '', semOS: false, meus: false, semDesigner: false };
+  return { arquivo: 'ativos', texto: '', os: '', de: '', ate: '', deBr: '', ateBr: '', status: '', vendedor: '', tipo: '', semOS: false, meus: false, semDesigner: false };
 }
 let FILTROS = filtrosZerados();
 // Há algum filtro além da busca por nome? Decide se "Mais filtros" abre sozinho.
@@ -2531,6 +2531,8 @@ function filtrarLista(lista) {
   const t = norm(FILTROS.texto);
   const os = FILTROS.os.trim();
   return lista.filter(b => {
+    const encerrado = b.status === 'Concluído';
+    if ((FILTROS.arquivo === 'finalizados') !== encerrado) return false;
     const alvoBusca = (b.cliente || '') + ' ' + (b.estabelecimento || '') + ' ' + (b.responsavel || '') +
       (b.numeroBrief ? ' ' + b.numeroBrief + ' ' + padBrief(b.numeroBrief) : '');
     if (t && !norm(alvoBusca).includes(t)) return false;
@@ -2658,6 +2660,7 @@ function renderLista(app) {
     // No desktop o CSS mantém tudo aberto.
     (podeCriar() ? '<div class="lista-acoes"><h1>Briefings</h1><button class="botao" id="novo-brief-topo">Novo briefing</button></div>' : '') +
     '<div class="card filtros-brief">' +
+    '<div class="chips brief-arquivo" role="group" aria-label="Situação dos briefings"><button class="chip '+(FILTROS.arquivo !== 'finalizados' ? 'marcado' : '')+'" id="brief-ativos">Em andamento</button><button class="chip '+(FILTROS.arquivo === 'finalizados' ? 'marcado' : '')+'" id="brief-finalizados">Finalizados</button></div>' +
     '<div id="chips-vendedores" class="chips vendedores-lista" role="group" aria-label="Filtrar por vendedor"></div>' +
     '<div class="campo" style="margin:0 0 10px"><label for="f-texto">Buscar cliente, contato ou briefing</label>' +
     '<input id="f-texto" type="search" placeholder="Parte do nome já encontra" value="' + esc(FILTROS.texto) + '"></div>' +
@@ -2720,6 +2723,8 @@ function renderLista(app) {
     atualizarVendedores();
     ligarCards();
   };
+  $('#brief-ativos').onclick = () => { FILTROS.arquivo = 'ativos'; FILTROS.status = ''; renderApp(); };
+  $('#brief-finalizados').onclick = () => { FILTROS.arquivo = 'finalizados'; FILTROS.status = ''; renderApp(); };
   atualizarVendedores();
   _refreshCards = rerenderCards; // pra sincronização de fundo atualizar só os cartões
   $('#f-texto').oninput = debounce(e => { FILTROS.texto = e.target.value; rerenderCards(); }, 250);
@@ -2736,7 +2741,7 @@ function renderLista(app) {
     FILTROS.ate = dataBrParaYmd(e.target.value);
     rerenderCards();
   };
-  $('#f-status').onchange = e => { FILTROS.status = e.target.value; rerenderCards(); };
+  $('#f-status').onchange = e => { FILTROS.status = e.target.value; FILTROS.arquivo = e.target.value === 'Concluído' ? 'finalizados' : 'ativos'; renderApp(); };
   const fv = $('#f-vendedor'); if (fv) fv.onchange = e => { FILTROS.vendedor = e.target.value; rerenderCards(); };
   $('#f-tipo').onchange = e => { FILTROS.tipo = e.target.value; rerenderCards(); };
   $('#f-semos').onclick = e => { FILTROS.semOS = !FILTROS.semOS; e.target.classList.toggle('marcado', FILTROS.semOS); rerenderCards(); };
@@ -2770,7 +2775,7 @@ function htmlCards(lista) {
     const naoSubiu = !rascunho && b._syncFalhou;
     const subindo = !rascunho && !b._syncFalhou && naFila.has(b.id);
     return (
-      '<button class="cartao-brief" data-id="' + b.id + '" data-rascunho="' + (rascunho ? '1' : '') + '">' +
+      '<div class="brief-linha"><button class="cartao-brief" data-id="' + b.id + '" data-rascunho="' + (rascunho ? '1' : '') + '">' +
       '<div><div class="nome">' + esc(b.cliente || 'Cliente sem nome') + (b.estabelecimento ? ' · ' + esc(b.estabelecimento) : '') + '</div>' +
       '<div class="meta">' + fmtDataHora(b.dataHora || b.criadoEm) + ' · ' + esc(b.vendedor || '') +
       ' · ' + (b.itens || []).length + ' item(ns)</div>' +
@@ -2791,12 +2796,15 @@ function htmlCards(lista) {
       (b.medidorAtribuido ? '<span class="badge medidor">📍 ' + esc(b.medidorAtribuido.nome) +
         (b.visitaConcluida ? ' ✓' : '') + '</span>' : '') +
       '</div></div>' +
-      '</button>'
+      '</button>' +
+      (b.finalizacao ? '<div class="brief-resultado"><strong>'+ (b.finalizacao.resultado === 'positivo' ? '👍 Deu certo' : '👎 Não deu certo') +'</strong><small>'+esc(b.finalizacao.por)+' · '+fmtDataHora(b.finalizacao.em)+'</small>'+(b.finalizacao.motivo ? '<p>'+esc(b.finalizacao.motivo)+'</p>' : '')+'</div>' : '') +
+      (podeFinalizarBriefing(b) ? '<div class="brief-baixa" aria-label="Finalizar briefing"><button type="button" class="botao suave mini" data-baixa="positivo" data-brief="'+esc(b.id)+'" title="Finalizar: deu certo">👍 Deu certo</button><button type="button" class="botao fantasma mini" data-baixa="negativo" data-brief="'+esc(b.id)+'" title="Finalizar: não deu certo">👎 Não deu certo</button></div>' : '') + '</div>'
     );
   }).join('');
 }
 
 function ligarCards() {
+  $$('[data-baixa]').forEach(bt => bt.onclick = () => finalizarBriefing(STORE.getOS(bt.dataset.brief), bt.dataset.baixa));
   $$('.cartao-brief').forEach(c => {
     c.onclick = () => {
       const id = c.dataset.id;
@@ -2811,6 +2819,7 @@ function ligarCards() {
         return;
       }
       const meu = norm(b.vendedorUsuario) === norm(SESSAO.usuario);
+      if (b.status === 'Concluído') { location.hash = '#/b/' + id; return; }
       if (b.situacao !== 'enviado' && (meu || SESSAO.papel === 'admin')) location.hash = '#/editar/' + id;
       else location.hash = '#/b/' + id;
     };
@@ -4117,8 +4126,32 @@ function gravarBriefing(b, mudar) {
 }
 
 function podeFinalizarBriefing(b) {
-  return !!b && !b.apagadoEm && b.situacao === 'enviado' && b.status !== 'Concluído' &&
-    !!SESSAO && ['admin', 'designer'].includes(SESSAO.papel);
+  return !!b && !b.apagadoEm && b.status !== 'Concluído' && !!SESSAO &&
+    (SESSAO.papel === 'admin' || (SESSAO.papel === 'designer' && b.situacao === 'enviado'));
+}
+
+function finalizarBriefing(b, resultado) {
+  if (!podeFinalizarBriefing(b) || !['positivo','negativo'].includes(resultado)) return;
+  let motivo = '';
+  if (resultado === 'negativo') {
+    const resposta = prompt('Por que não deu certo? Registre o motivo da finalização.');
+    if (resposta === null) return;
+    motivo = resposta.trim();
+    if (!motivo || motivo.length > 2000) { toast('Informe o motivo, com até 2.000 caracteres.', 'erro'); return; }
+  }
+  if (!confirm('Finalizar ' + (b.cliente || 'este briefing') + ' como “' + (resultado === 'positivo' ? 'Deu certo' : 'Não deu certo') + '”? Ele irá para Finalizados, mantendo fotos e informações.')) return;
+  const evento = { resultado, motivo, em: new Date().toISOString(), por: SESSAO.nome || SESSAO.usuario, usuario: SESSAO.usuario };
+  const ok = gravarBriefing(b, alvo => {
+    alvo.status = 'Concluído';
+    alvo.finalizacao = evento;
+    const historico = alvo.historicoFinalizacoes || [];
+    alvo.historicoFinalizacoes = historico.some(e => e.em === evento.em && e.usuario === evento.usuario) ? historico : [...historico, evento];
+  });
+  if (!ok) { toast('Não foi possível salvar a finalização. Tente novamente.', 'erro'); return; }
+  FILTROS.arquivo = 'ativos';
+  if (location.hash !== '#/lista') location.hash = '#/lista';
+  else renderApp();
+  toast('Movido para Finalizados. Salvo neste aparelho; sincronização com a nuvem na fila.', 'sucesso');
 }
 
 function renderDetalhe(app) {
@@ -4334,14 +4367,7 @@ function renderDetalhe(app) {
 
   // A baixa usa o mesmo status e a mesma sincronização já existentes.
   const finalizar = $('#btn-finalizar-brief');
-  if (finalizar) finalizar.onclick = () => {
-    if (!podeFinalizarBriefing(b)) return;
-    if (!confirm('Finalizar este briefing? Ele ficará como Concluído, preservando fotos, medidas e histórico.')) return;
-    const ok = gravarBriefing(b, alvo => { alvo.status = 'Concluído'; });
-    if (!ok) { toast('Não foi possível salvar a baixa. Tente novamente.', 'erro'); return; }
-    renderApp();
-    toast('Briefing concluído. Baixa salva neste aparelho e na fila de sincronização.', 'sucesso');
-  };
+  if (finalizar) finalizar.onclick = () => finalizarBriefing(b, 'positivo');
 
   // Ações
   $('#btn-pdf-brief').onclick = () => exportarPdfBriefing(b);

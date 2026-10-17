@@ -1,0 +1,18 @@
+const vm=require('node:vm'),fs=require('node:fs'),assert=require('node:assert/strict');
+const source=fs.readFileSync(__dirname+'/../app.js','utf8').replace(/boot\(\);\s*$/,'');
+let saved,saveOk=true,confirmOk=true,reason='Cliente desistiu';
+const store={getUser:()=>({papel:'admin',usuario:'a'}),getOS:()=>saved,saveOS:b=>{if(saveOk)saved=structuredClone(b);return saveOk},on(){},onSync(){},onConflict(){},idsNaFila:()=>new Set()};
+const ctx=vm.createContext({STORE:store,window:{addEventListener(){}},document:{documentElement:{dataset:{}},querySelector:()=>null},location:{hash:'#/b/exemplo'},console,setTimeout,clearTimeout,confirm:()=>confirmOk,prompt:()=>reason});
+vm.runInContext(source,ctx);const run=s=>vm.runInContext(s,ctx);
+run("toast=()=>{};renderApp=()=>{};SESSAO={papel:'admin',usuario:'a',nome:'Direção teste'};var b={id:'exemplo',cliente:'Cliente fictício',situacao:'rascunho',status:'Aguardando orçamento',itens:[{foto:'original'}]};");
+confirmOk=false;run("finalizarBriefing(b,'positivo')");assert.equal(saved,undefined);
+confirmOk=true;reason=' ';run("finalizarBriefing(b,'negativo')");assert.equal(saved,undefined);
+reason=null;run("finalizarBriefing(b,'negativo')");assert.equal(saved,undefined);
+reason='Cliente desistiu';run("finalizarBriefing(b,'negativo')");assert.equal(saved.status,'Concluído');assert.equal(saved.finalizacao.motivo,reason);assert.equal(saved.itens[0].foto,'original');assert.equal(saved.historicoFinalizacoes.length,1);
+assert.equal(run('filtrarLista([b]).length'),0);run("FILTROS.arquivo='finalizados'");assert.equal(run('filtrarLista([b]).length'),1);
+run("finalizarBriefing(b,'positivo')");assert.equal(saved.historicoFinalizacoes.length,1);
+assert.match(run('htmlCards([b])'),/Não deu certo/);
+saved=undefined;run("b={id:'outro',situacao:'enviado',status:'Em design'};SESSAO.papel='designer';finalizarBriefing(b,'positivo')");assert.equal(saved.finalizacao.resultado,'positivo');
+run("SESSAO.papel='vendedor';b.status='Em design'");assert.equal(run('podeFinalizarBriefing(b)'),false);
+saved=undefined;saveOk=false;run("SESSAO.papel='admin';finalizarBriefing(b,'positivo')");assert.equal(saved,undefined);
+console.log('Finalização: positivo, negativo com motivo, cancelamento, permissões, fotos preservadas, histórico, falha de armazenamento e separação ativos/finalizados: OK');
