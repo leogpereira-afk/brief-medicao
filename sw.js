@@ -3,7 +3,7 @@
 //
 // DISCIPLINA: bump no CACHE (v1 → v2 → …) A CADA deploy, senão os aparelhos
 // ficam presos na versão antiga.
-const CACHE = 'brief-shell-v61';
+const CACHE = 'brief-shell-v62';
 const SHELL = [
   './silk-design.css', './silk-compacto.webp',
   './', 'index.html', 'layout.html', 'manifest-layout.webmanifest', 'config.js', 'store.js', 'auth.js', 'app.js', 'auth.js?v=56', 'app.js?v=61', 'layout-drafts.js?v=61', 'styles.css?v=61', 'pdf.js', 'prancha.js', 'prancha.js?v=60', 'styles.css', 'sw.js',
