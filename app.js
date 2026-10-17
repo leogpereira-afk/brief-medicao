@@ -534,6 +534,7 @@ async function boot() {
     if (SESSAO) ACESSO_PAINEL = 'sem-acesso';
     renderAcessoPainel($('#app')); return;
   }
+  await recuperarLayouts();
   if ('serviceWorker' in navigator) { try { navigator.serviceWorker.register('sw.js'); } catch {} }
   // Já logado neste aparelho: vai direto pra área do perfil. Antes, toda
   // abertura caía em "Escolha por onde você entra" e exigia mais um toque --
@@ -676,7 +677,7 @@ function podeCriar() { return SESSAO && (SESSAO.papel === 'vendedor' || SESSAO.p
 
 // Texto do botão de sincronização, a partir do estado atual.
 function rotuloSync(status, pendentes) {
-  if (status === 'ok') return 'Sincronizado';
+  if (status === 'ok') return 'Dados atualizados';
   if (status === 'pending') {
     // Item que já falhou várias vezes não pode se esconder atrás do rótulo de
     // fila saudável: o vendedor precisa saber que tem algo precisando de ajuda.
@@ -866,6 +867,7 @@ function sairDaConta() {
 }
 
 function renderApp() {
+  if (typeof LAYOUT_DRAFTS !== 'undefined') queueMicrotask(() => { melhorarControles(); salvarLayouts(); });
   const app = $('#app');
   flushSalvar(); // nunca redesenhar por cima de digitação ainda não gravada
   if (!SESSAO || (SISTEMA_LAYOUT && !podeUsarLayout())) return renderAcessoPainel(app);
@@ -1176,18 +1178,102 @@ function rascunhoProjeto() {
     String(PROJ.cliente || '').trim() || String(PROJ.osNumero || '').trim()));
 }
 
+let draftKey = '', draftLast = '', draftStatus = 'Preparando salvamento local…';
+let draftQueue = Promise.resolve();
+async function recuperarLayouts() {
+  if (!SISTEMA_LAYOUT || !SESSAO || !podeUsarLayout() || typeof LAYOUT_DRAFTS === 'undefined') return;
+  const user = SESSAO.usuario || SESSAO.id;
+  if (!user) return;
+  draftKey = 'v1:' + String(user).toLowerCase();
+  try {
+    const saved = await LAYOUT_DRAFTS.read(draftKey);
+    if (saved && saved.version === 1 && Array.isArray(saved.producao?.setores) && Array.isArray(saved.projeto?.imagens)) {
+      PROD = Object.assign(prodVazio(), saved.producao, { buscando:false });
+      PROJ = Object.assign(projVazio(), saved.projeto, { buscando:false });
+      LOTE = saved.lote && Array.isArray(saved.lote.itens) ? saved.lote : null;
+      draftStatus = 'Rascunho recuperado deste navegador';
+    } else draftStatus = 'Salvamento automático neste navegador';
+  } catch { draftStatus = 'Salvamento local indisponível. Gere o PDF antes de sair.'; }
+}
+function salvarLayouts() {
+  if (!SISTEMA_LAYOUT || !draftKey || !SESSAO || draftKey !== 'v1:' + String(SESSAO.usuario || SESSAO.id).toLowerCase()) return;
+  const data = { version:1, producao:{...PROD,buscando:false}, projeto:{...PROJ,buscando:false}, lote:LOTE };
+  const serial = JSON.stringify(data);
+  if (serial === draftLast) return;
+  const key = draftKey;
+  draftLast = serial;
+  draftStatus = 'Salvando rascunho neste navegador…'; atualizarEstadoRascunho();
+  draftQueue = draftQueue.catch(() => {}).then(() => LAYOUT_DRAFTS.write(key, JSON.parse(serial))).then(() => {
+    if (draftKey !== key || draftLast !== serial) return;
+    draftStatus = 'Rascunho salvo neste navegador · ' + new Date().toLocaleTimeString('pt-BR',{hour:'2-digit',minute:'2-digit'});
+    atualizarEstadoRascunho();
+  }).catch(() => {
+    if (draftKey !== key || draftLast !== serial) return;
+    draftLast = ''; draftStatus = 'Não foi possível salvar o rascunho. Gere o PDF antes de sair.';
+    atualizarEstadoRascunho();
+  });
+}
+function atualizarEstadoRascunho() {
+  const el = $('#layout-save-state'); if (el) el.textContent = draftStatus;
+}
 function htmlAvisoLayout() {
-  return '<div class="aviso-rascunho">Rascunho desta sessão. Antes de fechar ou recarregar, gere o PDF ou salve as pranchas no briefing. <button class="botao mini fantasma" id="layout-novo">Começar do zero</button></div>';
+  return '<div class="aviso-rascunho"><div><strong id="layout-save-state" role="status">' + esc(draftStatus) + '</strong>' + (LOTE && LOTE.modo === ROTA.modo ? '<button class="botao mini suave" id="layout-retomar">Continuar revisão do lote</button>' : '') + '<small>Local neste aparelho. Para compartilhar, salve as pranchas no briefing. A revisão do último lote também é recuperada aqui.</small></div><details class="layout-opcoes"><summary>Opções</summary><button class="botao mini fantasma" id="layout-novo">Descartar rascunho</button></details></div>';
 }
 function ligarNovoLayout(modo) {
-  $('#layout-novo').onclick = () => confirmar('Começar do zero?',
-    'Apaga somente o rascunho de ' + (modo === 'producao' ? 'Produção' : 'Projeto') + ' desta sessão. Os briefings salvos não serão alterados.',
-    'Começar do zero', () => {
+  const retomar = $('#layout-retomar'); if (retomar) retomar.onclick = () => abrirPreviaLote();
+  $('#layout-novo').onclick = () => confirmar('Descartar rascunho?',
+    'Apaga somente o rascunho de ' + (modo === 'producao' ? 'Produção' : 'Projeto') + ' deste navegador. Os briefings salvos não serão alterados.',
+    'Descartar rascunho', () => {
       if (modo === 'producao') PROD = prodVazio();
       else PROJ = projVazio();
-      renderApp();
+      if (LOTE && LOTE.modo === modo) LOTE = null;
+      salvarLayouts(); renderApp();
     }, true);
 }
+function atualizarGerarProducao() {
+  const btn = $('#pr-gerar');
+  if (btn) btn.disabled = !(temDadosProducao() && PROD.setores.length);
+  const hint = $('#pr-pendencia');
+  if (hint) hint.textContent = !temDadosProducao() ? 'Informe a O.S. ou o cliente.' : !PROD.setores.length ? 'Selecione pelo menos um setor.' : 'Tudo pronto para revisar as pranchas.';
+}
+function melhorarControles() {
+  if (ROTA.nome === 'layout') {
+    const main = $('.miolo'); if (main) main.classList.add('layout-workspace');
+    const sources = $('.duas-buscas');
+    if (sources && !sources.previousElementSibling?.classList.contains('layout-source-nav')) {
+      const state = ROTA.modo === 'producao' ? PROD : PROJ;
+      const nav = document.createElement('div'); nav.className='layout-source-nav';
+      nav.setAttribute('aria-label','Origem dos dados');
+      [['os','Buscar O.S.'],['brief','Vincular briefing'],['manual','Preencher manualmente']].forEach(([value,label]) => {
+        const btn=document.createElement('button'); btn.type='button'; btn.textContent=label;
+        btn.onclick=() => { state.fonte=value; aplicar(); salvarLayouts(); };
+        btn.dataset.fonte=value; nav.appendChild(btn);
+      });
+      sources.before(nav);
+      function aplicar() {
+        const selected=state.fonte || (state.briefingId ? 'brief' : 'os');
+        [...nav.children].forEach(btn=>btn.setAttribute('aria-pressed',String(btn.dataset.fonte===selected)));
+        [...sources.children].forEach((panel,i)=>panel.hidden=selected==='manual'||(selected==='os'?i!==0:i!==1));
+        sources.style.gridTemplateColumns='1fr';
+      }
+      aplicar();
+    }
+  }
+  $$('.chip').forEach(el => el.setAttribute('aria-pressed',String(el.classList.contains('marcado'))));
+  $$('.opcao').forEach(el => {
+    el.setAttribute('role','button'); el.tabIndex=0;
+    el.setAttribute('aria-pressed',String(el.classList.contains('marcada')));
+    el.onkeydown = e => { if (e.key==='Enter'||e.key===' ') { e.preventDefault(); el.click(); } };
+  });
+  $$('input[id],textarea[id],select[id]').forEach(el => {
+    const label = el.closest('.campo')?.querySelector('label');
+    if (label && !label.htmlFor) label.htmlFor = el.id;
+    if (!label && !el.getAttribute('aria-label') && el.placeholder) el.setAttribute('aria-label',el.placeholder);
+  });
+}
+window.addEventListener('change', () => { if (typeof LAYOUT_DRAFTS !== 'undefined') salvarLayouts(); });
+window.addEventListener('input', () => { if (typeof LAYOUT_DRAFTS !== 'undefined') salvarLayouts(); });
+window.addEventListener('click', () => { if (typeof LAYOUT_DRAFTS !== 'undefined') queueMicrotask(() => { melhorarControles(); salvarLayouts(); }); });
 
 /* ── Modo Produção ─────────────────────────────────────────────────────── */
 
@@ -1336,8 +1422,7 @@ function renderLayoutProducao(app) {
 
     '<button class="botao largo" id="pr-gerar"' + (pronto && PROD.setores.length ? '' : ' disabled') + '>' +
     '⚙️ Gerar ' + (PROD.setores.length || '') + ' prancha' + (PROD.setores.length === 1 ? '' : 's') + '</button>' +
-    (!pronto ? '<p class="dica-campo" style="text-align:center; margin-top:8px">Informe a O.S. ou pelo menos o cliente.</p>'
-      : (!PROD.setores.length ? '<p class="dica-campo" style="text-align:center; margin-top:8px">Marque pelo menos um setor.</p>' : '')) +
+    '<p id="pr-pendencia" class="dica-campo" role="status">' + (!pronto ? 'Informe a O.S. ou o cliente.' : !PROD.setores.length ? 'Selecione pelo menos um setor.' : 'Tudo pronto para revisar as pranchas.') + '</p>' +
     '</main>';
 
   ligarTopo();
@@ -1348,7 +1433,7 @@ function renderLayoutProducao(app) {
   [['pr-os', 'osNumero'], ['pr-cliente', 'cliente'], ['pr-contato', 'contato'],
    ['pr-vendedor', 'vendedor'], ['pr-endereco', 'endereco']].forEach(([id, campo]) => {
     const el = $('#' + id);
-    if (el) el.oninput = () => { PROD[campo] = el.value; };
+    if (el) el.oninput = () => { PROD[campo] = el.value; atualizarGerarProducao(); };
   });
   const bt = $('#pr-buscar');
   if (bt) bt.onclick = () => buscarOSProducao();
@@ -1464,7 +1549,7 @@ function projVazio() {
     briefingId: '', busca: '', cliente: '', contato: '', osNumero: '',
     os: null, erroOS: '', buscando: false,
     vendedor: '', endereco: '', setor: 'Projeto', urgente: false,
-    imagens: []
+    imagens: [], errosUpload: []
   };
 }
 let PROJ = projVazio();
@@ -1484,6 +1569,19 @@ function baseProjeto() {
   };
 }
 
+async function lerArteOriginal(file) {
+  if (!['image/jpeg','image/png'].includes(file.type)) throw new Error('Use JPG ou PNG.');
+  if (file.size > 20 * 1024 * 1024) throw new Error('O limite é 20 MB por imagem.');
+  const data = await new Promise((resolve,reject) => {
+    const reader = new FileReader(); reader.onload = () => resolve(reader.result);
+    reader.onerror = () => reject(new Error('Falha ao ler o arquivo.')); reader.readAsDataURL(file);
+  });
+  await new Promise((resolve,reject) => {
+    const img = new Image(); img.onload = () => resolve();
+    img.onerror = () => reject(new Error('Imagem inválida.')); img.src = data;
+  });
+  return data;
+}
 function renderLayoutProjeto(app) {
   document.title = 'Prancha de projeto';
   if (!PROJ._aberto) { PROJ = projVazio(); PROJ._aberto = true; }
@@ -1509,10 +1607,11 @@ function renderLayoutProjeto(app) {
     '<main class="miolo">' +
     htmlAvisoLayout() +
 
-    '<div class="card"><div class="sub-secao">1 · Arte final (JPG)</div>' +
-    '<p class="dica-campo" style="margin-bottom:10px">Pode soltar vários de uma vez: cada imagem vira uma prancha, numerada sozinha.</p>' +
+    '<div class="card"><div class="sub-secao">1 · Artes do projeto</div>' +
+    '<p class="dica-campo" style="margin-bottom:10px">Selecione imagens JPG ou PNG, até 20 MB por arquivo. Os originais são preservados; cada imagem gera uma prancha.</p>' +
     '<button class="botao largo suave" id="pj-add">🖼 Escolher imagens</button>' +
-    '<input type="file" accept="image/*" multiple id="pj-input" hidden>' +
+    '<input type="file" accept="image/jpeg,image/png" multiple id="pj-input" hidden>' +
+    ((PROJ.errosUpload || []).length ? '<div class="aviso amarelo" role="alert">' + PROJ.errosUpload.map(esc).join('<br>') + '</div>' : '') +
     (PROJ.imagens.length
       ? '<div class="grade-galeria" style="margin-top:12px">' + PROJ.imagens.map((im, i) =>
           '<figure><img src="' + im.base64 + '" alt="Arte ' + (i + 1) + '">' +
@@ -1592,10 +1691,13 @@ function renderLayoutProjeto(app) {
   inp.onchange = async () => {
     const arquivos = Array.from(inp.files || []);
     if (!arquivos.length) return;
+    PROJ.errosUpload = [];
     toast('Preparando ' + arquivos.length + ' imagem(ns)…');
     for (const f of arquivos) {
-      const base64 = await STORE.compressImage(f);
-      if (base64) PROJ.imagens.push({ base64, nome: f.name });
+      try {
+        const base64 = await lerArteOriginal(f);
+        PROJ.imagens.push({ base64, nome: f.name });
+      } catch (e) { PROJ.errosUpload.push(f.name + ': ' + e.message); }
     }
     inp.value = '';
     renderApp();
@@ -1880,6 +1982,7 @@ function escolherFotoDoBriefing(fotos, aoEscolher) {
 }
 
 function abrirPreviaLote() {
+  if (typeof LAYOUT_DRAFTS !== 'undefined') salvarLayouts();
   if (!LOTE || !LOTE.itens.length) return;
   const cfg = LOTE.cfg || STORE.getCFG();
   const tiposServico = cfg.tiposServico || [];
@@ -2036,11 +2139,17 @@ function abrirPreviaLote() {
     else card.querySelector('.acoes-prancha').insertAdjacentHTML('afterbegin', '<img class="thumb-prancha" src="' + base64 + '" alt="">');
   });
 
-  // Cancelar confirma quando há ficha/carimbo marcados (não dá pra reabrir).
-  $('.btn-cancelar', m).onclick = () => {
+  const fecharRevisao = $('.btn-cancelar', m);
+  if (SISTEMA_LAYOUT && draftKey) fecharRevisao.textContent = 'Voltar ao Layout';
+  fecharRevisao.onclick = async () => {
+    if (SISTEMA_LAYOUT && draftKey) {
+      salvarLayouts(); await draftQueue;
+      if (!draftLast) { toast('O rascunho não foi salvo. Exporte o PDF antes de fechar.', 'erro'); return; }
+      m.remove(); renderApp(); return;
+    }
     if (loteTemMarcacao()) {
-      confirmar('Descartar as pranchas?', 'Você marcou fichas ou carimbos. Fechar agora perde tudo isso -- não dá pra reabrir depois.',
-        'Descartar', () => m.remove(), true);
+      confirmar('Fechar revisão?', 'Salve no briefing ou exporte antes de fechar para preservar as alterações.',
+        'Fechar', () => m.remove(), true);
     } else m.remove();
   };
   // Só fecha a prévia DEPOIS do PDF sair. Antes fechava na hora e, se a geração
@@ -2088,7 +2197,7 @@ function abrirPreviaLote() {
 // arquivo, e ele é reaproveitado tanto pela prévia quanto pela exportação.
 let _pranchaScript = null;
 function ensureModelos() {
-  if (!_pranchaScript) _pranchaScript = carregarScript('prancha.js');
+  if (!_pranchaScript) _pranchaScript = carregarScript('prancha.js?v=57');
   return _pranchaScript;
 }
 
@@ -2167,7 +2276,7 @@ async function salvarLoteNoBriefing(loteRecebido) {
   // salva ficava apontando pra uma imagem que nunca existiu no servidor.
   for (const p of LOTE.itens) {
     if (!p.imagemId && p.imagem) {
-      p.imagemId = await STORE.salvarFotoBase64(p.imagem, 'image/jpeg', 'prancha_' + STORE.uuid().slice(0, 12));
+      p.imagemId = await STORE.salvarFotoBase64(p.imagem, p.imagem.startsWith('data:image/png') ? 'image/png' : 'image/jpeg', 'prancha_' + STORE.uuid().slice(0, 12));
       p._bytes = Math.round(p.imagem.length * 0.75);
     }
   }
@@ -2547,7 +2656,8 @@ function renderLista(app) {
     // "Buscar cliente" fica sempre à vista; o resto se recolhe no celular atrás
     // de "Mais filtros", pra lista não abrir escondida atrás de 8 campos.
     // No desktop o CSS mantém tudo aberto.
-    '<div class="card filtros-brief"><div class="campo" style="margin:0 0 10px"><label for="f-texto">Buscar cliente</label>' +
+    (podeCriar() ? '<div class="lista-acoes"><h1>Briefings</h1><button class="botao" id="novo-brief-topo">Novo briefing</button></div>' : '') +
+    '<div class="card filtros-brief"><div class="campo" style="margin:0 0 10px"><label for="f-texto">Buscar cliente, contato ou briefing</label>' +
     '<input id="f-texto" type="search" placeholder="Parte do nome já encontra" value="' + esc(FILTROS.texto) + '"></div>' +
     '<details class="filtros-extra"' + (filtrosExtraAtivos() ? ' open' : '') + '>' +
     '<summary>Mais filtros' + (filtrosExtraAtivos() ? ' · ativos' : '') + '</summary>' +
@@ -2585,6 +2695,7 @@ function renderLista(app) {
     (podeCriar() ? '<button class="fab" id="fab-novo">➕ Novo briefing</button>' : '');
 
   ligarTopo();
+  const novoTopo = $('#novo-brief-topo'); if (novoTopo) novoTopo.onclick = () => { location.hash='#/novo'; };
   const rerenderCards = () => {
     const todosAgora = visiveisPraSessao();
     const filt = filtrarLista(todosAgora).sort((a, z) => String(z.dataHora || z.criadoEm).localeCompare(String(a.dataHora || a.criadoEm)));
@@ -2618,7 +2729,7 @@ function renderLista(app) {
   $('#btn-ficha-branco').onclick = () => exportarFichaVisita(null);
   const fab = $('#fab-novo'); if (fab) fab.onclick = () => { location.hash = '#/novo'; };
   // No desktop os filtros ficam sempre abertos (o resumo só existe no celular).
-  const fx = $('.filtros-extra'); if (fx && ehDesktop()) fx.open = true;
+  // Filtros avançados recolhidos em todas as larguras, exceto quando ativos.
   ligarCards();
 }
 

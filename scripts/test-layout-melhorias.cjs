@@ -1,0 +1,22 @@
+const vm=require('node:vm'),fs=require('node:fs'),assert=require('node:assert/strict');
+const source=fs.readFileSync(__dirname+'/../app.js','utf8').replace(/boot\(\);\s*$/,'');
+const disk=new Map(),btn={disabled:true},hint={textContent:''};
+const store={getUser:()=>({papel:'admin',usuario:'a'}),getOS:()=>null,on(){},onSync(){},onConflict(){}};
+const ctx=vm.createContext({FileReader:class {readAsDataURL(f){this.result=f.data;this.onload()}},Image:class {set src(v){this.onload()}},STORE:store,window:{addEventListener(){}},document:{documentElement:{dataset:{sistema:'layout'}},querySelector:s=>s==='#pr-gerar'?btn:s==='#pr-pendencia'?hint:null},location:{},console,setTimeout,clearTimeout,LAYOUT_DRAFTS:{read:async k=>disk.get(k),write:async(k,v)=>disk.set(k,v)}});
+vm.runInContext(source,ctx);const run=s=>vm.runInContext(s,ctx);
+(async()=>{
+ await run('recuperarLayouts()');
+ run("PROD={...prodVazio(),_aberto:true,setores:['Teste']};atualizarGerarProducao()"); assert.equal(btn.disabled,true);
+ run("PROD.cliente='Cliente fictício';atualizarGerarProducao()");assert.equal(btn.disabled,false);
+ run("PROD.cliente='';atualizarGerarProducao()");assert.equal(btn.disabled,true);
+ run("LOTE={modo:'projeto',itens:[{tituloServico:'Revisão fictícia'}]};PROD.cliente='Cliente fictício';PROJ={...projVazio(),_aberto:true,imagens:[{base64:'data:image/png;base64,TESTE',nome:'teste.png'}]};salvarLayouts()");await run('draftQueue');
+ run('PROD=prodVazio();PROJ=projVazio()');await run('recuperarLayouts()');
+ assert.equal(run('LOTE.itens[0].tituloServico'),'Revisão fictícia');assert.equal(run('PROD.cliente'),'Cliente fictício');assert.equal(run('PROJ.imagens[0].base64'),'data:image/png;base64,TESTE');
+ run("SESSAO={papel:'admin',usuario:'b'};PROD=prodVazio();PROJ=projVazio();draftLast=''");await run('recuperarLayouts()');assert.equal(run('PROD.cliente'),'');
+ run("PROD.cliente='Outro fictício';salvarLayouts()");await run('draftQueue');assert.equal(disk.get('v1:a').producao.cliente,'Cliente fictício');
+ run("LAYOUT_DRAFTS.write=async()=>{throw Error('quota')};PROD.cliente='Quota teste';salvarLayouts()");await run('draftQueue');assert.match(run('draftStatus'),/Não foi possível/);
+ await assert.rejects(run("lerArteOriginal({type:'image/gif',size:1})"),/JPG ou PNG/);
+ await assert.rejects(run("lerArteOriginal({type:'image/png',size:21*1024*1024})"),/20 MB/);
+ assert.equal(await run("lerArteOriginal({type:'image/png',size:100,data:'data:image/png;base64,ORIGINAL'})"),'data:image/png;base64,ORIGINAL');
+ console.log('Gerar: habilitar e desabilitar; recuperação com arte original; isolamento por usuário; falha de armazenamento: aprovados.');
+})().catch(e=>{console.error(e);process.exitCode=1});

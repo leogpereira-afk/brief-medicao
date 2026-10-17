@@ -841,7 +841,7 @@ const PRANCHA = (() => {
       let w = wArte, h = w * prop;
       if (h > hImg) { h = hImg; w = h / prop; }
       const ix = xArte + (wArte - w) / 2, iy = yImg + (hImg - h) / 2;
-      try { doc.addImage(p.imagem, 'JPEG', ix, iy, w, h, undefined, 'FAST'); } catch {}
+      try { doc.addImage(p.imagem, p.imagem.startsWith('data:image/png') ? 'PNG' : 'JPEG', ix, iy, w, h, undefined, 'FAST'); } catch {}
       // Moldura fina: a arte fica com cara de peça, não de imagem solta na folha.
       doc.setDrawColor(...BORDA); doc.setLineWidth(0.8);
       doc.rect(ix, iy, w, h);

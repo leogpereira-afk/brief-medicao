@@ -674,3 +674,48 @@ input:focus, select:focus, textarea:focus { outline: none; border-color: var(--i
 .modulos-brief{display:flex;gap:5px;align-items:center}.modulos-brief a{padding:9px 13px;border-radius:9px;text-decoration:none;color:var(--texto,#334155);font-weight:600;font-size:14px;white-space:nowrap;border:1px solid #dfe3f0}.modulos-brief a.ativo{background:#3840e8;color:white;border-color:#3840e8}.modulos-brief a:focus-visible{outline:3px solid #7e85f4;outline-offset:2px}.aviso-rascunho{font-size:12px;line-height:1.6;padding:10px 12px;background:#eef0ff;border-left:3px solid #3840e8;border-radius:6px;margin-bottom:16px}.portas-layout .porta{min-height:150px;padding:22px}.portas-layout .icone-porta{font-size:32px}.portas-layout .nome-porta{font-size:20px}@media(max-width:900px){.modulos-brief{order:2;width:100%}.modulos-brief a{flex:1;text-align:center}.nav-topo{order:3}}
 
 .topo .modulos-brief a{color:#fff;border-color:#ffffff70;background:#ffffff12}.topo .modulos-brief a.ativo{background:white;color:#3038bb}.filtros-brief input,.filtros-brief select{padding:10px 12px;min-height:42px}.filtros-brief .campo{margin-bottom:10px}.filtros-brief{padding:16px}
+
+/* Interface de trabalho: leitura compacta, controles consistentes. */
+body { font-family:'Poppins',-apple-system,BlinkMacSystemFont,'Segoe UI',sans-serif; font-size:14px; }
+input,select,textarea { font-size:.92rem; }
+.dica-campo { font-size:.84rem; line-height:1.55; }
+.card { border:1px solid #e4e7ee; box-shadow:0 2px 8px #1c244008; border-radius:14px; }
+.botao { border-radius:10px; min-height:44px; padding:10px 16px; font-size:.9rem; }
+button:focus-visible,a:focus-visible,summary:focus-visible,[role="button"]:focus-visible { outline:3px solid #1777a8; outline-offset:3px; }
+.filtros-extra > summary { display:flex; cursor:pointer; min-height:44px; align-items:center; }
+.filtros-extra:not([open]) > .filtros { display:none; }
+.filtros-extra > .filtros { margin-top:10px; }
+.aviso-rascunho { display:flex; align-items:center; justify-content:space-between; gap:16px; padding:12px 16px; font-size:.8rem; border-radius:10px; background:#eef2ff; }
+.aviso-rascunho small { display:block; margin-top:4px; color:#535d72; line-height:1.5; }
+.layout-opcoes { flex-shrink:0; position:relative; }
+.layout-opcoes summary { cursor:pointer; padding:8px; }
+.layout-opcoes[open] .botao { position:absolute; z-index:5; right:0; width:185px; background:white; box-shadow:0 4px 16px #0002; }
+.layout-workspace .duas-buscas { align-items:start; }
+.layout-workspace .busca-fonte { min-height:0; padding:12px; }
+.layout-workspace .busca-fonte input { min-width:0; }
+.layout-workspace .vazio { padding:16px 8px; }
+.layout-workspace .grade-galeria img { object-fit:contain; background:#f3f4f7; }
+.layout-workspace > .card { padding:18px; }
+.layout-workspace .sub-secao { color:#46526c; font-size:.73rem; letter-spacing:.045em; }
+.layout-workspace #pj-gerar,.layout-workspace #pr-gerar { position:sticky; bottom:16px; z-index:4; box-shadow:0 4px 18px #1c244030; }
+.layout-source-nav { display:flex; gap:8px; flex-wrap:wrap; margin:12px 0; }
+.layout-source-nav button { background:white; border:1px solid #cbd2e2; padding:9px 14px; border-radius:8px; color:#35415a; min-height:44px; cursor:pointer; }
+.layout-source-nav button[aria-pressed="true"] { background:#eef0ff; color:#3038b8; border-color:#7c83dd; }
+@media (min-width:1000px) {
+ .layout-workspace { max-width:1180px; }
+ .layout-workspace .campo { margin-bottom:12px; }
+ .filtros-brief { padding:18px; }
+}
+@media (max-width:600px) {
+ .topo .marca .titulo { font-size:.86rem; }
+ .topo .marca .subtitulo { display:none; }
+ .topo .marca { min-width:0; flex:1; }
+ .topo #chip-sync { max-width:100px; font-size:.62rem; }
+ .aviso-rascunho { align-items:flex-start; gap:6px; padding:10px; }
+ .layout-workspace > .card { padding:14px; }
+ .layout-workspace #pj-gerar,.layout-workspace #pr-gerar { bottom:8px; }
+}
+.lista-acoes { display:flex; align-items:center; justify-content:space-between; gap:12px; margin:0 0 14px; }
+.lista-acoes h1 { margin:0; font-size:1.35rem; }
+@media (min-width:700px) { body:has(.lista-acoes) .fab { display:none; } }
+@media (max-width:600px) { .topo .marca .sub { display:none; } .topo .marca .titulo { white-space:normal; line-height:1.3; } }
