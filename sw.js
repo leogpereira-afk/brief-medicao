@@ -3,9 +3,9 @@
 //
 // DISCIPLINA: bump no CACHE (v1 → v2 → …) A CADA deploy, senão os aparelhos
 // ficam presos na versão antiga.
-const CACHE = 'brief-shell-v52';
+const CACHE = 'brief-shell-v53';
 const SHELL = [
-  './', 'index.html', 'config.js', 'store.js', 'auth.js', 'app.js', 'pdf.js', 'prancha.js', 'styles.css', 'sw.js',
+  './', 'index.html', 'layout.html', 'manifest-layout.webmanifest', 'config.js', 'store.js', 'auth.js', 'app.js', 'pdf.js', 'prancha.js', 'styles.css', 'sw.js',
   'manifest.webmanifest', 'logo-impresilk.png', 'logo-impresilk-branco.png',
   'libs/jspdf.umd.min.js', 'libs/pdf-assets.js', 'libs/zip.js',
   'fonts/Poppins-500.woff2', 'fonts/Poppins-600.woff2', 'fonts/Poppins-700.woff2',

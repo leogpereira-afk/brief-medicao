@@ -5,6 +5,9 @@
 
 /* ══════════════════ Constantes ══════════════════ */
 
+const SISTEMA_LAYOUT = document.documentElement?.dataset?.sistema === 'layout';
+const ENTRADA_SISTEMA = SISTEMA_LAYOUT ? '#/layout/projeto' : '#/lista';
+
 const STATUS_LISTA = ['Aguardando orçamento', 'Em design', 'Aprovado pra execução', 'Concluído'];
 const OBSTACULOS = ['Árvore', 'Poste', 'Marquise', 'Fiação', 'Outro'];
 const SERVICOS_EXTRAS = [
@@ -488,6 +491,8 @@ STORE.on('item-descartado', (d) => {
   toast('O briefing' + cli + ' não conseguiu subir pro design. Ele está marcado na lista com "NÃO SUBIU" — toque pra tentar de novo.', 'erro');
 });
 
+window.addEventListener('beforeunload', e => { if (rascunhoProducao() || rascunhoProjeto()) { e.preventDefault(); e.returnValue = ''; } });
+
 window.addEventListener('hashchange', () => { lerRota(); renderApp(); });
 
 async function boot() {
@@ -497,7 +502,7 @@ async function boot() {
   // e tocar na porta errada dava aviso vermelho e um login inútil.
   if (SESSAO && (location.hash === '' || location.hash === '#/' || location.hash === '#/inicio')) {
     const porPapel = { vendedor: '#/lista', designer: '#/lista', admin: '#/lista' };
-    location.hash = porPapel[SESSAO.papel] || '#/lista';
+    location.hash = SISTEMA_LAYOUT ? ENTRADA_SISTEMA : porPapel[SESSAO.papel] || '#/lista';
   }
   lerRota();
   renderApp(); // mostra o cache na hora; a rede atualiza quando chegar
@@ -598,11 +603,23 @@ let _refreshCards = null;
 function lerRota() {
   const h = location.hash.replace(/^#\/?/, '');
   const partes = h.split('/');
+  if (SISTEMA_LAYOUT) {
+    if (!SESSAO || !podeUsarLayout()) { ROTA = { nome: 'login', area: 'layout' }; return; }
+    if (h === 'trocar-senha') { ROTA = { nome: 'senha' }; return; }
+    ROTA = { nome: 'layout', modo: partes[1] === 'producao' ? 'producao' : 'projeto', id: partes[2] || '' };
+    return;
+  }
+  // Endereços antigos continuam abrindo o sistema correto.
+  if (partes[0] === 'layout') {
+    location.replace('layout.html#/' + h);
+    ROTA = { nome: SESSAO ? 'lista' : 'inicio' };
+    return;
+  }
   // Porta de entrada: escolhe Comercial ou Designer antes de qualquer login
   if (h === '' || h === 'inicio') { ROTA = { nome: 'inicio' }; return; }
   if (partes[0] === 'entrar') { ROTA = { nome: 'login', area: partes[1] || 'comercial' }; return; }
   if (h === 'trocar-senha') { ROTA = { nome: 'senha' }; return; }
-  if (!SESSAO) { ROTA = { nome: 'inicio' }; return; }
+  if (!SESSAO) { ROTA = partes[0] === 'layout' ? { nome: 'login', area: 'layout' } : { nome: 'inicio' }; return; }
   if (h === 'agenda') ROTA = { nome: 'agenda' };
   else if (h === 'lista') ROTA = { nome: 'lista' };
   else if (h === 'login') ROTA = { nome: 'login', area: 'comercial' };
@@ -610,7 +627,7 @@ function lerRota() {
   else if (partes[0] === 'editar') ROTA = { nome: 'editor', id: partes[1] };
   else if (partes[0] === 'b') ROTA = { nome: 'detalhe', id: partes[1], aba: partes[2] || 'dados' };
   else if (partes[0] === 'admin') ROTA = { nome: 'admin', aba: partes[1] || 'usuarios' };
-  else if (partes[0] === 'layout') ROTA = { nome: 'layout', modo: partes[1] || '', id: partes[2] || '' };
+  else if (partes[0] === 'layout') ROTA = { nome: 'layout', modo: partes[1] || 'projeto', id: partes[2] || '' };
   else if (h === 'arquivos') ROTA = { nome: 'arquivos' };
   else ROTA = { nome: 'lista' };
 }
@@ -649,21 +666,21 @@ function htmlTopo(tituloTela) {
     // atalhos embaixo do título). Antes ela sumia abaixo de 900px e a única
     // saída era o ☰ -- quem usa no celular, que é a maioria, não descobria que
     // existiam Arquivos e Gerador de layout.
-    '<nav class="nav-topo">' +
-    (souMedidor()
+    '<nav class="nav-topo" aria-label="Ferramentas do módulo">' +
+    (ROTA.nome === 'layout' ? '' : souMedidor()
       ? '<a href="#/agenda" class="' + (ROTA.nome === 'agenda' ? 'ativo' : '') + '">📍 Minhas visitas</a>'
       : '<a href="#/lista" class="' + (ROTA.nome === 'lista' ? 'ativo' : '') + '">📋 Briefings</a>') +
     // Quem não é medidor mas tem visita marcada no nome (vendedor que vai medir,
     // gestão) só descobria isso abrindo briefing por briefing. O atalho aparece
     // sozinho quando existe compromisso, e some quando não existe.
-    (!souMedidor() && SESSAO && AREAS.medicao.papeis.includes(SESSAO.papel) && contarCompromissos()
+    (ROTA.nome !== 'layout' && !souMedidor() && SESSAO && AREAS.medicao.papeis.includes(SESSAO.papel) && contarCompromissos()
       ? '<a href="#/agenda" class="' + (ROTA.nome === 'agenda' ? 'ativo' : '') + '">📍 Minhas visitas' +
         '<span class="marcador-nav">' + contarCompromissos() + '</span></a>'
       : '') +
-    (podeCriar() ? '<a href="#/novo" class="' + (ROTA.nome === 'novo' || ROTA.nome === 'editor' ? 'ativo' : '') + '">➕ Novo</a>' : '') +
-    (podeVerArquivos() ? '<a href="#/arquivos" class="' + (ROTA.nome === 'arquivos' ? 'ativo' : '') + '">🖼 Arquivos</a>' : '') +
-    (podeUsarLayout() ? '<a href="#/layout" class="' + (ROTA.nome === 'layout' ? 'ativo' : '') + '">🗂 Layout</a>' : '') +
-    (SESSAO && SESSAO.papel === 'admin' ? '<a href="#/admin" class="' + (ROTA.nome === 'admin' ? 'ativo' : '') + '">🛠 Painel</a>' : '') +
+    (ROTA.nome !== 'layout' && podeCriar() ? '<a href="#/novo" class="' + (ROTA.nome === 'novo' || ROTA.nome === 'editor' ? 'ativo' : '') + '">➕ Novo</a>' : '') +
+    (!SISTEMA_LAYOUT && podeVerArquivos() ? '<a href="#/arquivos" class="' + (ROTA.nome === 'arquivos' ? 'ativo' : '') + '">🖼 Arquivos</a>' : '') +
+    (ROTA.nome === 'layout' ? '<a href="#/layout/projeto" class="' + (ROTA.modo === 'projeto' ? 'ativo' : '') + '">Projeto</a><a href="#/layout/producao" class="' + (ROTA.modo === 'producao' ? 'ativo' : '') + '">Produção</a>' : '') +
+    (!SISTEMA_LAYOUT && SESSAO && SESSAO.papel === 'admin' ? '<a href="#/admin" class="' + (ROTA.nome === 'admin' ? 'ativo' : '') + '">⚙ Configurações</a>' : '') +
     '</nav>' +
     // O estado da sincronização é BOTÃO, não etiqueta: antes ele só informava, e
     // quem via "2 pendente(s)" não tinha onde apertar -- tinha que abrir o menu
@@ -732,14 +749,13 @@ function abrirMenu() {
   sheet.innerHTML =
     '<div class="quem">' + esc(SESSAO.nome) + '</div>' +
     '<div class="papel">Perfil: ' + esc(SESSAO.papel) + '</div>' +
-    '<a href="#/lista">📋 Briefings</a>' +
-    (podeCriar() ? '<a href="#/novo">➕ Novo briefing</a>' : '') +
-    (podeVerArquivos() ? '<a href="#/arquivos">🖼 Arquivos</a>' : '') +
-    (podeUsarLayout() ? '<a href="#/layout">🗂 Gerador de layout</a>' : '') +
-    (SESSAO.papel === 'admin' ? '<a href="#/admin">🛠 Painel de controle</a>' : '') +
+    (!SISTEMA_LAYOUT ? '<a href="#/lista">📋 Briefings</a>' : '<a href="#/layout/projeto">Projeto</a><a href="#/layout/producao">Produção</a>') +
+    (!SISTEMA_LAYOUT && podeCriar() ? '<a href="#/novo">➕ Novo briefing</a>' : '') +
+    (!SISTEMA_LAYOUT && podeVerArquivos() ? '<a href="#/arquivos">🖼 Arquivos</a>' : '') +
+    (!SISTEMA_LAYOUT && SESSAO.papel === 'admin' ? '<a href="#/admin">🛠 Painel de controle</a>' : '') +
     '<a href="#/">🏠 Tela inicial</a>' +
-    '<button class="item" id="menu-ficha">🖨 Ficha de visita em branco (PDF)</button>' +
-    '<button class="item" id="menu-manual">❓ Manual de medição e fotos</button>' +
+    (!SISTEMA_LAYOUT ? '<button class="item" id="menu-ficha">🖨 Ficha de visita em branco (PDF)</button>' : '') +
+    (!SISTEMA_LAYOUT ? '<button class="item" id="menu-manual">❓ Manual de medição e fotos</button>' : '') +
     '<button class="item" id="menu-sync">🔄 Sincronizar agora</button>' +
     '<a href="#/trocar-senha">🔑 Trocar a minha senha</a>' +
     '<button class="item" id="menu-sair">🚪 Sair da conta</button>';
@@ -747,8 +763,8 @@ function abrirMenu() {
   document.body.appendChild(sheet);
   const fechar = () => { fundo.remove(); sheet.remove(); };
   $$('a', sheet).forEach(a => a.addEventListener('click', fechar));
-  $('#menu-manual', sheet).onclick = () => { fechar(); abrirManual(); };
-  $('#menu-ficha', sheet).onclick = () => { fechar(); exportarFichaVisita(null); };
+  if (!SISTEMA_LAYOUT) $('#menu-manual', sheet).onclick = () => { fechar(); abrirManual(); };
+  if (!SISTEMA_LAYOUT) $('#menu-ficha', sheet).onclick = () => { fechar(); exportarFichaVisita(null); };
   $('#menu-sync', sheet).onclick = async () => { fechar(); toast('Sincronizando…'); await STORE.pull(() => renderApp()); STORE.trySync(); };
   $('#menu-sair', sheet).onclick = () => { fechar(); sairDaConta(); };
 }
@@ -842,6 +858,7 @@ function renderApp() {
 
 // Qual área cada perfil pode abrir
 const AREAS = {
+  layout: { rotulo: 'Layout', papeis: ['designer', 'admin'], destino: '#/layout/projeto' },
   comercial: { rotulo: 'Comercial', papeis: ['vendedor', 'admin'], destino: '#/lista' },
   designer:  { rotulo: 'Designer',  papeis: ['designer', 'admin'], destino: '#/lista' },
   // Quem vai à rua medir. A casa dele é a AGENDA (o que tem pra hoje), não a
@@ -895,7 +912,7 @@ function renderInicio(app) {
     '<button class="porta" data-area="designer">' +
     '<span class="icone-porta">🎨</span>' +
     '<span class="nome-porta">DESIGNER</span>' +
-    '<span class="desc-porta">Receber briefings e gerar pranchas</span></button>' +
+    '<span class="desc-porta">Conferir briefings e informações da visita</span></button>' +
     '<button class="porta" data-area="medicao">' +
     '<span class="icone-porta">📍</span>' +
     '<span class="nome-porta">MEDIÇÃO</span>' +
@@ -1038,7 +1055,7 @@ function renderTrocarSenha(app) {
     STORE.setUser(Object.assign({}, SESSAO, { trocarSenha: false }));
     SESSAO = STORE.getUser();
     toast('Senha trocada ✓', 'sucesso');
-    location.hash = '#/lista';
+    location.hash = ENTRADA_SISTEMA;
   };
 }
 
@@ -1104,14 +1121,11 @@ function fotoPrincipal(b) {
 function renderLayout(app) {
   if (!podeUsarLayout()) { toast('O gerador de layout é da área do designer', 'erro'); location.hash = '#/lista'; return; }
   const modo = ROTA.modo;
-  // Só ENTRAR NO OUTRO modo encerra o rascunho (evita misturar dois trabalhos).
-  // Passar pela tela de modos NÃO apaga mais: o designer ia conferir uma medida,
-  // voltava, e o cliente/endereço/setores que ele tinha digitado sumiam.
-  if (modo === 'projeto') PROD._aberto = false;
-  if (modo === 'producao') PROJ._aberto = false;
+  // Cada modo mantém seu próprio rascunho durante a sessão.
+  // Só o comando explícito Começar do zero apaga o preenchimento.
   if (modo === 'producao') return renderLayoutProducao(app);
-  if (modo === 'projeto') return renderLayoutProjeto(app);
-  return renderLayoutInicio(app);
+  ROTA.modo = 'projeto';
+  return renderLayoutProjeto(app);
 }
 
 // Há rascunho aberto em algum modo? (pra avisar em vez de perder calado)
@@ -1123,35 +1137,15 @@ function rascunhoProjeto() {
     String(PROJ.cliente || '').trim() || String(PROJ.osNumero || '').trim()));
 }
 
-function renderLayoutInicio(app) {
-  document.title = 'Gerador de layout';
-  const temProd = rascunhoProducao(), temProj = rascunhoProjeto();
-  app.innerHTML =
-    htmlTopo('Gerador de layout') +
-    '<main class="miolo">' +
-    '<p class="dica-campo" style="margin:4px 2px 16px">As duas opções usam o mesmo modelo de prancha, preenchido automático.</p>' +
-    // O rascunho sobrevive a passar por aqui; o aviso deixa isso explícito e dá
-    // o botão pra começar limpo quando é outro trabalho.
-    (temProd || temProj
-      ? '<div class="aviso indigo" style="margin-bottom:14px">Você tem um trabalho em andamento em <b>' +
-        (temProd ? 'Produção' : 'Projeto') + '</b>. Entrar de novo continua de onde parou. ' +
-        '<button class="botao mini fantasma" id="lay-zerar" style="margin-left:8px">Começar do zero</button></div>'
-      : '') +
-    '<div class="portas portas-layout">' +
-    '<button class="porta" data-modo="producao">' +
-    '<span class="icone-porta">🏭</span><span class="nome-porta">PRODUÇÃO</span>' +
-    '<span class="desc-porta">Uma prancha por setor, a partir da O.S. ou de um briefing</span></button>' +
-    '<button class="porta" data-modo="projeto">' +
-    '<span class="icone-porta">🖼</span><span class="nome-porta">PROJETO</span>' +
-    '<span class="desc-porta">Layout aprovado: solta os JPGs e sai o PDF</span></button>' +
-    '</div></main>';
-  ligarTopo();
-  $$('[data-modo]').forEach(bt => bt.onclick = () => { location.hash = '#/layout/' + bt.dataset.modo; });
-  const zerar = $('#lay-zerar');
-  if (zerar) zerar.onclick = () => confirmar('Começar do zero?',
-    'Vai apagar o que você já preencheu no gerador de layout.', 'Começar do zero', () => {
-      PROD = prodVazio();
-      PROJ = projVazio();
+function htmlAvisoLayout() {
+  return '<div class="aviso-rascunho">Rascunho desta sessão. Antes de fechar ou recarregar, gere o PDF ou salve as pranchas no briefing. <button class="botao mini fantasma" id="layout-novo">Começar do zero</button></div>';
+}
+function ligarNovoLayout(modo) {
+  $('#layout-novo').onclick = () => confirmar('Começar do zero?',
+    'Apaga somente o rascunho de ' + (modo === 'producao' ? 'Produção' : 'Projeto') + ' desta sessão. Os briefings salvos não serão alterados.',
+    'Começar do zero', () => {
+      if (modo === 'producao') PROD = prodVazio();
+      else PROJ = projVazio();
       renderApp();
     }, true);
 }
@@ -1204,7 +1198,13 @@ function temDadosProducao() {
 
 function renderLayoutProducao(app) {
   document.title = 'Pranchas de produção';
-  if (!PROD._aberto) PROD = Object.assign(prodVazio(), { _aberto: true });
+  if (!PROD._aberto) {
+    const origem = ROTA.id ? STORE.getOS(decodeURIComponent(ROTA.id)) : null;
+    PROD = Object.assign(prodVazio(), { _aberto: true }, origem ? {
+      briefingId: origem.id, osNumero: String(origem.osNumero || ''),
+      urgente: !!origem.urgente, mostrarBrief: true
+    } : {});
+  }
   const cfg = STORE.getCFG();
   const setores = cfg.setoresProducao || [];
   const b = PROD.briefingId ? STORE.getOS(PROD.briefingId) : null;
@@ -1225,7 +1225,7 @@ function renderLayoutProducao(app) {
   app.innerHTML =
     htmlTopo('Pranchas de produção') +
     '<main class="miolo">' +
-    '<a href="#/layout" class="dica-campo" style="display:inline-block; margin-bottom:10px">← modos</a>' +
+    htmlAvisoLayout() +
 
     '<div class="card"><div class="sub-secao">1 · De onde vêm os dados</div>' +
     '<p class="dica-campo" style="margin-bottom:12px">Os dois caminhos valem e dá pra usar os dois juntos: a O.S. preenche o cabeçalho, o briefing traz as fotos e as medidas da visita.</p>' +
@@ -1277,11 +1277,11 @@ function renderLayoutProducao(app) {
     // Sempre editável: as fontes trazem o que têm, o designer corrige o que faltar.
     '<div class="sub-secao" style="margin-top:16px">Cabeçalho da prancha</div>' +
     '<div class="linha-2">' +
-    '<div class="campo"><label>Cliente</label><input id="pr-cliente" type="text" value="' + esc(base.cliente) + '"></div>' +
-    '<div class="campo"><label>Contato</label><input id="pr-contato" type="text" value="' + esc(base.responsavel) + '"></div>' +
+    '<div class="campo"><label for="pr-cliente">Cliente</label><input id="pr-cliente" type="text" value="' + esc(base.cliente) + '"></div>' +
+    '<div class="campo"><label for="pr-contato">Contato</label><input id="pr-contato" type="text" value="' + esc(base.responsavel) + '"></div>' +
     '</div><div class="linha-2">' +
-    '<div class="campo"><label>Vendedor</label><input id="pr-vendedor" type="text" value="' + esc(base.vendedor) + '"></div>' +
-    '<div class="campo"><label>Endereço</label><input id="pr-endereco" type="text" value="' + esc(base.endereco) + '"></div>' +
+    '<div class="campo"><label for="pr-vendedor">Vendedor</label><input id="pr-vendedor" type="text" value="' + esc(base.vendedor) + '"></div>' +
+    '<div class="campo"><label for="pr-endereco">Endereço</label><input id="pr-endereco" type="text" value="' + esc(base.endereco) + '"></div>' +
     '</div>' +
     // Urgência de todas as pranchas deste lote. Vem ligada quando o briefing é
     // urgente; sem briefing, o designer marca aqui uma vez pra todas.
@@ -1302,6 +1302,7 @@ function renderLayoutProducao(app) {
     '</main>';
 
   ligarTopo();
+  ligarNovoLayout('producao');
 
   // Campos do cabeçalho: gravam no estado sem re-renderizar (senão apaga o que
   // está sendo digitado a cada tecla).
@@ -1467,7 +1468,7 @@ function renderLayoutProjeto(app) {
   app.innerHTML =
     htmlTopo('Prancha de projeto') +
     '<main class="miolo">' +
-    '<a href="#/layout" class="dica-campo" style="display:inline-block; margin-bottom:10px">← modos</a>' +
+    htmlAvisoLayout() +
 
     '<div class="card"><div class="sub-secao">1 · Arte final (JPG)</div>' +
     '<p class="dica-campo" style="margin-bottom:10px">Pode soltar vários de uma vez: cada imagem vira uma prancha, numerada sozinha.</p>' +
@@ -1521,11 +1522,11 @@ function renderLayoutProjeto(app) {
 
     '<div class="sub-secao" style="margin-top:16px">Cabeçalho da prancha</div>' +
     '<div class="linha-2">' +
-    '<div class="campo"><label>Cliente</label><input id="pj-cliente" type="text" value="' + esc(base.cliente) + '"></div>' +
-    '<div class="campo"><label>Contato</label><input id="pj-contato" type="text" value="' + esc(base.responsavel) + '"></div>' +
+    '<div class="campo"><label for="pj-cliente">Cliente</label><input id="pj-cliente" type="text" value="' + esc(base.cliente) + '"></div>' +
+    '<div class="campo"><label for="pj-contato">Contato</label><input id="pj-contato" type="text" value="' + esc(base.responsavel) + '"></div>' +
     '</div><div class="linha-2">' +
-    '<div class="campo"><label>Vendedor</label><input id="pj-vendedor" type="text" value="' + esc(base.vendedor) + '"></div>' +
-    '<div class="campo"><label>Endereço</label><input id="pj-endereco" type="text" value="' + esc(base.endereco) + '"></div>' +
+    '<div class="campo"><label for="pj-vendedor">Vendedor</label><input id="pj-vendedor" type="text" value="' + esc(base.vendedor) + '"></div>' +
+    '<div class="campo"><label for="pj-endereco">Endereço</label><input id="pj-endereco" type="text" value="' + esc(base.endereco) + '"></div>' +
     '</div>' +
     '<div class="campo" style="margin-top:6px"><label>Prioridade</label>' +
     '<button class="chip chip-urgente ' + (base.urgente ? 'marcado' : '') + '" id="pj-urgente">🔴 URGENTE (carimbo em todas)</button></div>' +
@@ -1534,7 +1535,7 @@ function renderLayoutProjeto(app) {
     // Escolha do selo: dá pra fazer um layout de Instalação (ou de qualquer
     // setor) neste modo, com a ficha daquele setor na prancha.
     '<div class="card"><div class="sub-secao">3 · Tipo da prancha</div>' +
-    '<p class="dica-campo" style="margin-bottom:10px">"Projeto" é o layout aprovado. Escolhendo um setor, a prancha sai com o selo e a ficha dele (ex.: Instalação).</p>' +
+    '<p class="dica-campo" style="margin-bottom:10px">"Projeto" é a prancha de apresentação. A aprovação deve ser conferida no fluxo do pedido. Escolhendo um setor, a prancha sai com o selo e a ficha dele (ex.: Instalação).</p>' +
     '<div class="chips">' +
     '<button class="chip ' + (PROJ.setor === 'Projeto' ? 'marcado' : '') + '" data-pjsetor="Projeto">🖼 Projeto</button>' +
     setores.map(s => '<button class="chip ' + (PROJ.setor === s ? 'marcado' : '') + '" data-pjsetor="' + esc(s) + '">' + esc(s) + '</button>').join('') +
@@ -1546,6 +1547,7 @@ function renderLayoutProjeto(app) {
     '</main>';
 
   ligarTopo();
+  ligarNovoLayout('projeto');
   const inp = $('#pj-input');
   $('#pj-add').onclick = () => inp.click();
   inp.onchange = async () => {
@@ -2506,23 +2508,23 @@ function renderLista(app) {
     // "Buscar cliente" fica sempre à vista; o resto se recolhe no celular atrás
     // de "Mais filtros", pra lista não abrir escondida atrás de 8 campos.
     // No desktop o CSS mantém tudo aberto.
-    '<div class="card"><div class="campo" style="margin:0 0 10px"><label>Buscar cliente</label>' +
+    '<div class="card filtros-brief"><div class="campo" style="margin:0 0 10px"><label for="f-texto">Buscar cliente</label>' +
     '<input id="f-texto" type="search" placeholder="Parte do nome já encontra" value="' + esc(FILTROS.texto) + '"></div>' +
     '<details class="filtros-extra"' + (filtrosExtraAtivos() ? ' open' : '') + '>' +
     '<summary>Mais filtros' + (filtrosExtraAtivos() ? ' · ativos' : '') + '</summary>' +
     '<div class="filtros">' +
-    '<div class="campo" style="margin:0"><label>Número da O.S.</label><input id="f-os" type="text" inputmode="numeric" value="' + esc(FILTROS.os) + '"></div>' +
-    '<div class="campo" style="margin:0"><label>De</label><input id="f-de" type="text" inputmode="numeric" maxlength="10" placeholder="dd/mm/aaaa" value="' + esc(FILTROS.deBr || '') + '"></div>' +
-    '<div class="campo" style="margin:0"><label>Até</label><input id="f-ate" type="text" inputmode="numeric" maxlength="10" placeholder="dd/mm/aaaa" value="' + esc(FILTROS.ateBr || '') + '"></div>' +
+    '<div class="campo" style="margin:0"><label for="f-os">Número da O.S.</label><input id="f-os" type="text" inputmode="numeric" value="' + esc(FILTROS.os) + '"></div>' +
+    '<div class="campo" style="margin:0"><label for="f-de">De</label><input id="f-de" type="text" inputmode="numeric" maxlength="10" placeholder="dd/mm/aaaa" value="' + esc(FILTROS.deBr || '') + '"></div>' +
+    '<div class="campo" style="margin:0"><label for="f-ate">Até</label><input id="f-ate" type="text" inputmode="numeric" maxlength="10" placeholder="dd/mm/aaaa" value="' + esc(FILTROS.ateBr || '') + '"></div>' +
     '<div class="linha-filtros">' +
-    '<div class="campo" style="margin:0"><label>Status</label><select id="f-status"><option value="">Todos</option>' +
+    '<div class="campo" style="margin:0"><label for="f-status">Status</label><select id="f-status"><option value="">Todos</option>' +
     '<option value="__rascunho__"' + (FILTROS.status === '__rascunho__' ? ' selected' : '') + '>Rascunho (não enviado)</option>' +
     STATUS_LISTA.map(s => '<option ' + (FILTROS.status === s ? 'selected' : '') + '>' + esc(s) + '</option>').join('') + '</select></div>' +
     (SESSAO.papel !== 'vendedor'
-      ? '<div class="campo" style="margin:0"><label>Vendedor</label><select id="f-vendedor"><option value="">Todos</option>' +
+      ? '<div class="campo" style="margin:0"><label for="f-vendedor">Vendedor</label><select id="f-vendedor"><option value="">Todos</option>' +
         vendedores.map(v => '<option ' + (FILTROS.vendedor === v ? 'selected' : '') + '>' + esc(v) + '</option>').join('') + '</select></div>'
       : '') +
-    '<div class="campo" style="margin:0"><label>Tipo de medição</label><select id="f-tipo"><option value="">Todos</option>' +
+    '<div class="campo" style="margin:0"><label for="f-tipo">Tipo de medição</label><select id="f-tipo"><option value="">Todos</option>' +
     ['Orçamento', 'Execução'].map(v => '<option ' + (FILTROS.tipo === v ? 'selected' : '') + '>' + v + '</option>').join('') + '</select></div>' +
     '<div class="campo" style="margin:0"><label>&nbsp;</label>' +
     '<button id="f-semos" class="chip ' + (FILTROS.semOS ? 'marcado' : '') + '" style="width:100%; min-height:48px">Só sem O.S.</button></div>' +
@@ -4163,17 +4165,7 @@ function renderDetalhe(app) {
   $('#btn-baixar-fotos').onclick = () => baixarFotosDoBriefing(b);
   const bp = $('#btn-gerar-prancha');
   if (bp) bp.onclick = () => {
-    // `_aberto: true` é obrigatório: sem ele a tela de produção entende que
-    // está sendo aberta do zero e zera o rascunho -- levando embora o briefing
-    // que este botão acabou de escolher.
-    PROD = Object.assign(prodVazio(), {
-      briefingId: b.id,
-      osNumero: String(b.osNumero || '').trim(),
-      urgente: !!b.urgente, // briefing urgente já liga a prioridade do lote
-      mostrarBrief: true,
-      _aberto: true
-    });
-    location.hash = '#/layout/producao';
+    location.href = 'layout.html#/layout/producao/' + encodeURIComponent(b.id);
   };
   $$('[data-regerar]').forEach(bt => bt.onclick = () => {
     const v = (b.pranchas || []).find(x => String(x.versao) === bt.dataset.regerar);

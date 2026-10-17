@@ -669,3 +669,8 @@ input:focus, select:focus, textarea:focus { outline: none; border-color: var(--i
 .cartao-acesso { padding: 14px 15px; margin-bottom: 10px; }
 .ca-topo { display: flex; align-items: flex-start; justify-content: space-between; gap: 10px; }
 .ca-acoes { display: flex; gap: 8px; flex-wrap: wrap; margin-top: 10px; }
+
+/* Módulos distintos, mesmos registros e permissões. */
+.modulos-brief{display:flex;gap:5px;align-items:center}.modulos-brief a{padding:9px 13px;border-radius:9px;text-decoration:none;color:var(--texto,#334155);font-weight:600;font-size:14px;white-space:nowrap;border:1px solid #dfe3f0}.modulos-brief a.ativo{background:#3840e8;color:white;border-color:#3840e8}.modulos-brief a:focus-visible{outline:3px solid #7e85f4;outline-offset:2px}.aviso-rascunho{font-size:12px;line-height:1.6;padding:10px 12px;background:#eef0ff;border-left:3px solid #3840e8;border-radius:6px;margin-bottom:16px}.portas-layout .porta{min-height:150px;padding:22px}.portas-layout .icone-porta{font-size:32px}.portas-layout .nome-porta{font-size:20px}@media(max-width:900px){.modulos-brief{order:2;width:100%}.modulos-brief a{flex:1;text-align:center}.nav-topo{order:3}}
+
+.topo .modulos-brief a{color:#fff;border-color:#ffffff70;background:#ffffff12}.topo .modulos-brief a.ativo{background:white;color:#3038bb}.filtros-brief input,.filtros-brief select{padding:10px 12px;min-height:42px}.filtros-brief .campo{margin-bottom:10px}.filtros-brief{padding:16px}
