@@ -719,3 +719,8 @@ button:focus-visible,a:focus-visible,summary:focus-visible,[role="button"]:focus
 .lista-acoes h1 { margin:0; font-size:1.35rem; }
 @media (min-width:700px) { body:has(.lista-acoes) .fab { display:none; } }
 @media (max-width:600px) { .topo .marca .sub { display:none; } .topo .marca .titulo { white-space:normal; line-height:1.3; } }
+
+/* Atalhos de vendedor sempre visíveis na lista. */
+.vendedores-lista { gap: 8px; margin-bottom: 16px; flex-wrap: wrap; }
+.vendedores-rotulo { font-size: .85rem; font-weight: 600; align-self: center; margin-right: 4px; }
+.vendedores-lista .chip { min-height: 40px; }

@@ -2197,7 +2197,7 @@ function abrirPreviaLote() {
 // arquivo, e ele é reaproveitado tanto pela prévia quanto pela exportação.
 let _pranchaScript = null;
 function ensureModelos() {
-  if (!_pranchaScript) _pranchaScript = carregarScript('prancha.js?v=57');
+  if (!_pranchaScript) _pranchaScript = carregarScript('prancha.js?v=58');
   return _pranchaScript;
 }
 
@@ -2647,7 +2647,7 @@ function renderAgenda(app) {
 function renderLista(app) {
   document.title = 'Briefings · Brief de Medição';
   const todos = visiveisPraSessao();
-  const vendedores = [...new Set(STORE.getAllOS().filter(b => !b.apagadoEm).map(b => b.vendedor).filter(Boolean))].sort();
+  const vendedores = [...new Set(todos.map(b => b.vendedor).filter(Boolean))].sort((a, b) => a.localeCompare(b, 'pt-BR'));
   const filtrados = filtrarLista(todos).sort((a, z) => String(z.dataHora || z.criadoEm).localeCompare(String(a.dataHora || a.criadoEm)));
 
   app.innerHTML =
@@ -2657,7 +2657,9 @@ function renderLista(app) {
     // de "Mais filtros", pra lista não abrir escondida atrás de 8 campos.
     // No desktop o CSS mantém tudo aberto.
     (podeCriar() ? '<div class="lista-acoes"><h1>Briefings</h1><button class="botao" id="novo-brief-topo">Novo briefing</button></div>' : '') +
-    '<div class="card filtros-brief"><div class="campo" style="margin:0 0 10px"><label for="f-texto">Buscar cliente, contato ou briefing</label>' +
+    '<div class="card filtros-brief">' +
+    '<div id="chips-vendedores" class="chips vendedores-lista" role="group" aria-label="Filtrar por vendedor"></div>' +
+    '<div class="campo" style="margin:0 0 10px"><label for="f-texto">Buscar cliente, contato ou briefing</label>' +
     '<input id="f-texto" type="search" placeholder="Parte do nome já encontra" value="' + esc(FILTROS.texto) + '"></div>' +
     '<details class="filtros-extra"' + (filtrosExtraAtivos() ? ' open' : '') + '>' +
     '<summary>Mais filtros' + (filtrosExtraAtivos() ? ' · ativos' : '') + '</summary>' +
@@ -2696,14 +2698,29 @@ function renderLista(app) {
 
   ligarTopo();
   const novoTopo = $('#novo-brief-topo'); if (novoTopo) novoTopo.onclick = () => { location.hash='#/novo'; };
+  const atualizarVendedores = () => {
+    const lista = visiveisPraSessao();
+    const nomes = [...new Set(lista.map(b => b.vendedor).filter(Boolean))].sort((a, b) => a.localeCompare(b, 'pt-BR'));
+    const host = $('#chips-vendedores');
+    host.innerHTML = '<span class="vendedores-rotulo">Vendedores</span>' + ['', ...nomes].map(v =>
+      '<button type="button" class="chip ' + (FILTROS.vendedor === v ? 'marcado' : '') + '" aria-pressed="' + (FILTROS.vendedor === v) + '" data-vendedor="' + esc(v) + '">' + esc(v || 'Todos') + '</button>'
+    ).join('');
+    $$('[data-vendedor]', host).forEach(bt => bt.onclick = () => {
+      FILTROS.vendedor = bt.dataset.vendedor;
+      const select = $('#f-vendedor'); if (select) select.value = FILTROS.vendedor;
+      rerenderCards();
+    });
+  };
   const rerenderCards = () => {
     const todosAgora = visiveisPraSessao();
     const filt = filtrarLista(todosAgora).sort((a, z) => String(z.dataHora || z.criadoEm).localeCompare(String(a.dataHora || a.criadoEm)));
     $('#lista-cards').innerHTML = htmlCards(filt);
     // A contagem acompanha o filtro (antes ficava "48 de 48" fixo).
     const cont = $('#lista-contagem'); if (cont) cont.textContent = filt.length + ' de ' + todosAgora.length;
+    atualizarVendedores();
     ligarCards();
   };
+  atualizarVendedores();
   _refreshCards = rerenderCards; // pra sincronização de fundo atualizar só os cartões
   $('#f-texto').oninput = debounce(e => { FILTROS.texto = e.target.value; rerenderCards(); }, 250);
   $('#f-os').oninput = debounce(e => { FILTROS.os = e.target.value; rerenderCards(); }, 250);
@@ -4099,6 +4116,11 @@ function gravarBriefing(b, mudar) {
   return ok;
 }
 
+function podeFinalizarBriefing(b) {
+  return !!b && !b.apagadoEm && b.situacao === 'enviado' && b.status !== 'Concluído' &&
+    !!SESSAO && ['admin', 'designer'].includes(SESSAO.papel);
+}
+
 function renderDetalhe(app) {
   const b = STORE.getOS(ROTA.id);
   if (!b) { toast('Briefing não encontrado neste aparelho. Sincronize e tente de novo.', 'erro'); location.hash = '#/lista'; return; }
@@ -4133,6 +4155,7 @@ function renderDetalhe(app) {
       : '<div class="aviso amarelo" style="margin-top:0">🔒 O PDF e as fotos liberam depois que a visita for concluída. ' +
         'Até lá a medida ainda pode mudar, e nada deve sair pra produção.</div>') +
     '<div style="display:flex; flex-wrap:wrap; gap:8px">' +
+    (podeFinalizarBriefing(b) ? '<button class="botao mini" id="btn-finalizar-brief">✓ Finalizar briefing</button>' : '') +
     '<button class="botao mini" id="btn-pdf-brief"' + (liberado ? '' : ' disabled') + '>📄 PDF do briefing</button>' +
     '<button class="botao mini suave" id="btn-baixar-fotos"' + (liberado ? '' : ' disabled') + '>📥 Baixar todas as fotos (.zip)</button>' +
     // A ficha é o papel que o vendedor leva PRA visita: nunca pode ficar travada
@@ -4308,6 +4331,17 @@ function renderDetalhe(app) {
       renderApp();
       toast(u ? 'Briefing direcionado pra ' + u.nome + ' ✓' : 'Briefing liberado pra qualquer designer ✓', 'sucesso');
     });
+
+  // A baixa usa o mesmo status e a mesma sincronização já existentes.
+  const finalizar = $('#btn-finalizar-brief');
+  if (finalizar) finalizar.onclick = () => {
+    if (!podeFinalizarBriefing(b)) return;
+    if (!confirm('Finalizar este briefing? Ele ficará como Concluído, preservando fotos, medidas e histórico.')) return;
+    const ok = gravarBriefing(b, alvo => { alvo.status = 'Concluído'; });
+    if (!ok) { toast('Não foi possível salvar a baixa. Tente novamente.', 'erro'); return; }
+    renderApp();
+    toast('Briefing concluído. Baixa salva neste aparelho e na fila de sincronização.', 'sucesso');
+  };
 
   // Ações
   $('#btn-pdf-brief').onclick = () => exportarPdfBriefing(b);
