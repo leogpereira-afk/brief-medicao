@@ -718,7 +718,7 @@ function htmlTopo(tituloTela) {
       : '') +
     (ROTA.nome !== 'layout' && podeCriar() ? '<a href="#/novo" class="' + (ROTA.nome === 'novo' || ROTA.nome === 'editor' ? 'ativo' : '') + '">➕ Novo</a>' : '') +
     (!SISTEMA_LAYOUT && podeVerArquivos() ? '<a href="#/arquivos" class="' + (ROTA.nome === 'arquivos' ? 'ativo' : '') + '">🖼 Arquivos</a>' : '') +
-    (ROTA.nome === 'layout' ? '<a href="#/layout/projeto" class="' + (ROTA.modo === 'projeto' ? 'ativo' : '') + '">Projeto</a><a href="#/layout/producao" class="' + (ROTA.modo === 'producao' ? 'ativo' : '') + '">Produção</a>' : '') +
+    (ROTA.nome === 'layout' ? '<a href="#/layout/producao" class="' + (ROTA.modo === 'producao' ? 'ativo' : '') + '">Produção</a><a href="#/layout/projeto" class="' + (ROTA.modo === 'projeto' ? 'ativo' : '') + '">Projeto</a>' : '') +
     (!SISTEMA_LAYOUT && SESSAO && SESSAO.papel === 'admin' ? '<a href="#/admin" class="' + (ROTA.nome === 'admin' ? 'ativo' : '') + '">⚙ Configurações</a>' : '') +
     '</nav>' +
     // O estado da sincronização é BOTÃO, não etiqueta: antes ele só informava, e
@@ -1217,7 +1217,7 @@ function atualizarEstadoRascunho() {
   const el = $('#layout-save-state'); if (el) el.textContent = draftStatus;
 }
 function htmlAvisoLayout() {
-  return '<div class="aviso-rascunho"><div><strong id="layout-save-state" role="status">' + esc(draftStatus) + '</strong>' + (LOTE && LOTE.modo === ROTA.modo ? '<button class="botao mini suave" id="layout-retomar">Continuar revisão do lote</button>' : '') + '<small>Local neste aparelho. Para compartilhar, salve as pranchas no briefing. A revisão do último lote também é recuperada aqui.</small></div><details class="layout-opcoes"><summary>Opções</summary><button class="botao mini fantasma" id="layout-novo">Descartar rascunho</button></details></div>';
+  return '<div class="aviso-rascunho"><div><strong id="layout-save-state" role="status">' + esc(draftStatus) + '</strong>' + (LOTE && LOTE.modo === ROTA.modo ? '<button class="botao mini suave" id="layout-retomar">Continuar revisão do lote</button>' : '') + '</div><details class="layout-opcoes"><summary>Opções e ajuda</summary><p>Rascunho local neste aparelho, incluindo a revisão do último lote. Para compartilhar, salve as pranchas no briefing.</p><button class="botao mini fantasma" id="layout-novo">Descartar rascunho</button></details></div>';
 }
 function ligarNovoLayout(modo) {
   const retomar = $('#layout-retomar'); if (retomar) retomar.onclick = () => abrirPreviaLote();
@@ -1238,7 +1238,8 @@ function atualizarGerarProducao() {
 }
 function melhorarControles() {
   if (ROTA.nome === 'layout') {
-    const main = $('.miolo'); if (main) main.classList.add('layout-workspace');
+    const main = $('.miolo'); if (main) main.classList.add('layout-workspace', 'layout-' + ROTA.modo);
+    const topo = $('.topo'); if (topo) topo.classList.add('topo-layout');
     const sources = $('.duas-buscas');
     if (sources && !sources.previousElementSibling?.classList.contains('layout-source-nav')) {
       const state = ROTA.modo === 'producao' ? PROD : PROJ;
@@ -1336,23 +1337,14 @@ function renderLayoutProducao(app) {
   const base = baseProducao();
   const pronto = temDadosProducao();
 
-  const candidatos = STORE.getAllOS()
-    .filter(x => x && !x.apagadoEm && !x.avulsa && x.situacao === 'enviado')
-    .filter(x => {
-      const t = norm(PROD.busca);
-      if (!t) return true;
-      return norm((x.cliente || '') + ' ' + (x.osNumero || '') + ' ' +
-        (x.numeroBrief ? padBrief(x.numeroBrief) : '') + ' ' + fmtData(x.dataHora)).includes(t);
-    })
-    .sort((a, z) => String(z.dataHora || '').localeCompare(String(a.dataHora || '')))
-    .slice(0, 40);
+  const candidatos = briefingsParaLayout(PROD.busca);
 
   app.innerHTML =
     htmlTopo('Pranchas de produção') +
     '<main class="miolo">' +
     htmlAvisoLayout() +
 
-    '<div class="card"><div class="sub-secao">1 · De onde vêm os dados</div>' +
+    '<div class="card"><div class="sub-secao">1 · Dados da prancha</div>' +
     '<p class="dica-campo" style="margin-bottom:12px">Os dois caminhos valem e dá pra usar os dois juntos: a O.S. preenche o cabeçalho, o briefing traz as fotos e as medidas da visita.</p>' +
 
     // Os dois buscadores lado a lado. Nenhum é obrigatório: o cabeçalho embaixo
@@ -1375,7 +1367,7 @@ function renderLayoutProducao(app) {
     '</div>' +
 
     '<div class="busca-fonte">' +
-    '<div class="titulo-fonte"><span>📋</span><span>Por um briefing</span></div>' +
+    '<div class="titulo-fonte"><span>📋</span><span>Briefings ativos</span></div>' +
     '<input id="pr-busca" type="text" placeholder="Cliente, O.S., Nº do brief ou data" value="' + esc(PROD.busca) + '">' +
     (b
       ? '<div class="aviso verde" style="margin-top:8px"><b>' + esc(b.cliente) + '</b>' +
@@ -1394,7 +1386,7 @@ function renderLayoutProducao(app) {
             '<span class="dica-campo">' + (x.numeroBrief ? 'Nº ' + padBrief(x.numeroBrief) + ' · ' : '') +
             (String(x.osNumero || '').trim() ? 'O.S. ' + esc(x.osNumero) : 'sem O.S.') +
             ' · ' + fmtData(x.dataHora) + '</span></button>').join('') + '</div>'
-        : '<div class="vazio">Nenhum briefing enviado encontrado.</div>')) +
+        : '<div class="vazio">Nenhum briefing ativo encontrado para esta busca.</div>')) +
     '</div>' +
 
     '</div>' +
@@ -1445,7 +1437,7 @@ function renderLayoutProducao(app) {
     renderApp();
   };
   const busca = $('#pr-busca');
-  if (busca) busca.oninput = debounce(e => { PROD.busca = e.target.value; renderApp(); }, 300);
+  if (busca) busca.oninput = debounce(e => { buscarBriefLayout(e.target, PROD); }, 300);
   $$('[data-brief]').forEach(x => x.onclick = () => {
     PROD.briefingId = x.dataset.brief;
     // Vincular um briefing urgente já liga a prioridade do lote (o designer
@@ -1582,6 +1574,22 @@ async function lerArteOriginal(file) {
   });
   return data;
 }
+// Mesma base autorizada da tela de Briefings, sem cortes silenciosos.
+function briefingsParaLayout(busca) {
+  const termo = norm(busca);
+  return visiveisPraSessao().filter(b => !termo || norm([
+    b.cliente, b.estabelecimento, b.osNumero, b.numeroBrief,
+    b.numeroBrief ? padBrief(b.numeroBrief) : '', fmtData(b.dataHora)
+  ].filter(Boolean).join(' ')).includes(termo))
+    .sort((a, b) => String(b.dataHora || b.criadoEm || '').localeCompare(String(a.dataHora || a.criadoEm || '')));
+}
+function buscarBriefLayout(input, estado) {
+  const inicio = input.selectionStart, fim = input.selectionEnd, id = input.id;
+  estado.busca = input.value;
+  renderApp();
+  const novo = document.getElementById(id);
+  if (novo) { novo.focus({preventScroll:true}); novo.setSelectionRange(inicio, fim); }
+}
 function renderLayoutProjeto(app) {
   document.title = 'Prancha de projeto';
   if (!PROJ._aberto) { PROJ = projVazio(); PROJ._aberto = true; }
@@ -1591,24 +1599,15 @@ function renderLayoutProjeto(app) {
   // Setores disponíveis pro selo da prancha (permite fazer um layout de
   // Instalação — ou de qualquer setor — também aqui, não só na Produção).
   const setores = cfg.setoresProducao || [];
-  const candidatos = STORE.getAllOS()
-    .filter(x => x && !x.apagadoEm && !x.avulsa && x.situacao === 'enviado')
-    .filter(x => {
-      const t = norm(PROJ.busca);
-      if (!t) return true;
-      return norm((x.cliente || '') + ' ' + (x.osNumero || '') + ' ' +
-        (x.numeroBrief ? padBrief(x.numeroBrief) : '')).includes(t);
-    })
-    .sort((a, z) => String(z.dataHora || '').localeCompare(String(a.dataHora || '')))
-    .slice(0, 25);
+  const candidatos = briefingsParaLayout(PROJ.busca);
 
   app.innerHTML =
     htmlTopo('Prancha de projeto') +
     '<main class="miolo">' +
     htmlAvisoLayout() +
 
-    '<div class="card"><div class="sub-secao">1 · Artes do projeto</div>' +
-    '<p class="dica-campo" style="margin-bottom:10px">Selecione imagens JPG ou PNG, até 20 MB por arquivo. Os originais são preservados; cada imagem gera uma prancha.</p>' +
+    '<div class="card"><div class="sub-secao">Imagens da prancha</div>' +
+    '<p class="dica-campo" style="margin-bottom:10px">JPG ou PNG · até 20 MB · uma prancha por imagem. Originais preservados.</p>' +
     '<button class="botao largo suave" id="pj-add">🖼 Escolher imagens</button>' +
     '<input type="file" accept="image/jpeg,image/png" multiple id="pj-input" hidden>' +
     ((PROJ.errosUpload || []).length ? '<div class="aviso amarelo" role="alert">' + PROJ.errosUpload.map(esc).join('<br>') + '</div>' : '') +
@@ -1622,8 +1621,8 @@ function renderLayoutProjeto(app) {
 
     // Mesmas DUAS fontes da Produção: a O.S. preenche o cabeçalho sozinha (antes
     // este modo só buscava briefing e o resto era digitado à mão).
-    '<div class="card"><div class="sub-secao">2 · De onde vêm os dados</div>' +
-    '<p class="dica-campo" style="margin-bottom:12px">Os dois caminhos valem e dá pra usar os dois juntos: a O.S. preenche o cabeçalho, o briefing traz as medidas da visita.</p>' +
+    '<div class="card"><div class="sub-secao">Dados da prancha</div>' +
+    '<p class="dica-campo" style="margin-bottom:12px">O.S.: cabeçalho. Briefing: medidas da visita. Você pode combinar os dois.</p>' +
     '<div class="duas-buscas">' +
 
     '<div class="busca-fonte">' +
@@ -1641,7 +1640,7 @@ function renderLayoutProjeto(app) {
     '</div>' +
 
     '<div class="busca-fonte">' +
-    '<div class="titulo-fonte"><span>📋</span><span>Por um briefing</span></div>' +
+    '<div class="titulo-fonte"><span>📋</span><span>Briefings ativos</span></div>' +
     '<input id="pj-busca" type="text" placeholder="Cliente, O.S. ou Nº do brief" value="' + esc(PROJ.busca) + '">' +
     (b
       ? '<div class="aviso verde" style="margin-top:8px"><b>' + esc(b.cliente) + '</b>' +
@@ -1653,7 +1652,7 @@ function renderLayoutProjeto(app) {
             '<button class="opcao-briefing" data-pjbrief="' + x.id + '"><b>' + esc(x.cliente || 'Sem nome') + '</b>' +
             '<span class="dica-campo">' + (x.numeroBrief ? 'Nº ' + padBrief(x.numeroBrief) + ' · ' : '') +
             (String(x.osNumero || '').trim() ? 'O.S. ' + esc(x.osNumero) : 'sem O.S.') + ' · ' + fmtData(x.dataHora) + '</span></button>').join('') + '</div>'
-        : '<div class="vazio">Nenhum briefing enviado encontrado.</div>')) +
+        : '<div class="vazio">Nenhum briefing ativo encontrado para esta busca.</div>')) +
     '</div>' +
 
     '</div>' +
@@ -1672,7 +1671,7 @@ function renderLayoutProjeto(app) {
 
     // Escolha do selo: dá pra fazer um layout de Instalação (ou de qualquer
     // setor) neste modo, com a ficha daquele setor na prancha.
-    '<div class="card"><div class="sub-secao">3 · Tipo da prancha</div>' +
+    '<div class="card"><div class="sub-secao">Tipo da prancha</div>' +
     '<p class="dica-campo" style="margin-bottom:10px">"Projeto" é a prancha de apresentação. A aprovação deve ser conferida no fluxo do pedido. Escolhendo um setor, a prancha sai com o selo e a ficha dele (ex.: Instalação).</p>' +
     '<div class="chips">' +
     '<button class="chip ' + (PROJ.setor === 'Projeto' ? 'marcado' : '') + '" data-pjsetor="Projeto">🖼 Projeto</button>' +
@@ -1721,7 +1720,7 @@ function renderLayoutProjeto(app) {
     renderApp();
   };
 
-  $('#pj-busca').oninput = debounce(e => { PROJ.busca = e.target.value; renderApp(); }, 300);
+  $('#pj-busca').oninput = debounce(e => { buscarBriefLayout(e.target, PROJ); }, 300);
   $$('[data-pjbrief]').forEach(x => x.onclick = () => {
     PROJ.briefingId = x.dataset.pjbrief;
     const bb = STORE.getOS(x.dataset.pjbrief);

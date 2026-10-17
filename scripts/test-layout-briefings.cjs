@@ -1,0 +1,15 @@
+const fs=require('node:fs'),vm=require('node:vm'),assert=require('node:assert/strict');
+const rows=Array.from({length:55},(_,i)=>({id:'teste-'+i,cliente:'Cliente fictício '+i,numeroBrief:i+1,situacao:i%2?'enviado':'rascunho',vendedorUsuario:'teste',criadoEm:'2026-01-01'}));
+rows.push({id:'apagado',apagadoEm:'2026-01-01'}, {id:'avulsa',avulsa:true});
+const ctx=vm.createContext({STORE:{getUser:()=>({papel:'admin',usuario:'teste'}),getAllOS:()=>rows,on(){},onSync(){},onConflict(){}},window:{addEventListener(){}},document:{documentElement:{dataset:{sistema:'layout'}}},console,setTimeout,clearTimeout});
+vm.runInContext(fs.readFileSync(__dirname+'/../app.js','utf8').replace(/boot\(\);\s*$/,''),ctx);
+const run=s=>vm.runInContext(s,ctx);
+assert.equal(run("briefingsParaLayout('').length"),55);
+assert.equal(run("briefingsParaLayout('0001')[0].id"),'teste-0');
+assert.equal(run("briefingsParaLayout('ficticio 54')[0].id"),'teste-54');
+assert.equal(run("briefingsParaLayout('inexistente').length"),0);
+run("SESSAO={papel:'designer'}");assert.equal(run("briefingsParaLayout('').length"),27);
+run("SESSAO={papel:'vendedor',usuario:'outra',nome:'Outra pessoa fictícia'}");assert.equal(run("briefingsParaLayout('').length"),0);
+run("SESSAO={papel:'admin'};ROTA={nome:'layout',modo:'projeto'}");
+const h=run("htmlTopo('Teste')");assert.ok(h.indexOf('>Produção</a>')<h.indexOf('>Projeto</a>'));
+console.log('7 verificações: briefings visíveis, sem limite oculto, pesquisa e permissões, Produção primeiro.');

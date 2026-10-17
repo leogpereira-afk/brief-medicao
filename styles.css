@@ -731,3 +731,39 @@ button:focus-visible,a:focus-visible,summary:focus-visible,[role="button"]:focus
 .brief-baixa{display:flex;gap:8px;flex-wrap:wrap;justify-content:flex-end}.brief-baixa button{min-height:44px;white-space:nowrap}
 .brief-resultado{max-width:300px;padding:12px;font-size:14px}.brief-resultado small{display:block;margin-top:6px}.brief-resultado p{overflow-wrap:anywhere}.brief-arquivo{margin-bottom:16px}
 @media(max-width:700px){.brief-linha{flex-wrap:wrap;padding:0}.brief-linha .cartao-brief{flex-basis:100%}.brief-baixa,.brief-resultado{padding:0 16px 16px;max-width:100%}.brief-baixa{width:100%}}
+/* Pranchas: espaço dedicado ao trabalho, sem ação sobreposta ao formulário. */
+.topo.topo-layout { padding:12px 18px; gap:12px; }
+.topo-layout .marca img { width:52px; height:auto; }
+.topo-layout .marca .titulo { font-size:1rem; }
+.topo-layout .marca .sub { font-size:.72rem; }
+.topo-layout .nav-topo a { padding:8px 14px; }
+.miolo.layout-workspace { max-width:1440px; padding:16px; }
+.layout-workspace > .card { padding:14px; margin-bottom:12px; }
+.layout-workspace .sub-secao { margin-bottom:8px; text-transform:none; letter-spacing:0; font-size:.85rem; }
+.layout-workspace .dica-campo { font-size:.8rem; line-height:1.45; }
+.layout-workspace .campo { margin-bottom:8px; }
+.layout-workspace input,.layout-workspace select { padding:9px 11px; min-height:40px; }
+.layout-workspace .botao { padding:9px 14px; min-height:40px; }
+.layout-workspace .layout-source-nav { gap:6px; margin:8px 0; }
+.layout-workspace .layout-source-nav button { padding:8px 12px; min-height:40px; font-size:.8rem; border-radius:999px; }
+.layout-workspace .busca-fonte { padding:10px; border-radius:10px; }
+.layout-workspace .titulo-fonte { margin-bottom:8px; font-size:.85rem; }
+.layout-workspace .rolagem-curta { max-height:220px; overflow:auto; }
+.layout-workspace .opcao-briefing { padding:8px 10px; min-height:44px; }
+.layout-workspace .aviso-rascunho { display:flex; align-items:center; justify-content:space-between; gap:10px; padding:8px 12px; margin-bottom:12px; }
+.layout-workspace .layout-opcoes p { max-width:48ch; font-weight:400; }
+.layout-workspace #pj-gerar,.layout-workspace #pr-gerar { position:static; box-shadow:none; width:auto; min-width:220px; }
+@media(min-width:1000px){
+  .layout-projeto { display:grid; grid-template-columns:minmax(240px, .7fr) minmax(0, 1.7fr); gap:12px; align-items:start; grid-template-rows:auto min-content 1fr auto auto; }
+  .layout-projeto .aviso-rascunho { grid-column:1/-1; margin:0; }
+  .layout-projeto > .card { margin:0; min-width:0; }
+  .layout-projeto > .card:nth-of-type(3) { grid-column:2; grid-row:2/4; }
+  .layout-projeto > #pj-gerar { grid-column:1/-1; justify-self:end; }
+  .layout-projeto > .dica-campo { grid-column:1/-1; margin:0!important; }
+}
+@media(max-width:600px){
+ .miolo.layout-workspace { padding:10px; }
+ .layout-workspace .aviso-rascunho { align-items:flex-start; flex-wrap:wrap; }
+ .layout-workspace #pj-gerar,.layout-workspace #pr-gerar { width:100%; }
+ .topo.topo-layout { padding:10px; }
+}
