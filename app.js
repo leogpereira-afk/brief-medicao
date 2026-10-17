@@ -945,8 +945,7 @@ function renderInicio(app) {
     '<div class="tela-inicio">' +
     '<div class="miolo-inicio">' +
     '<img class="logo-inicio" src="logo-impresilk.png" alt="Impresilk">' +
-    '<h1 class="titulo-inicio">Brief de Medição</h1>' +
-    '<p class="sub-inicio">Escolha por onde você entra</p>' +
+    '<header class="silk-faixa" data-tom="azul"><img class="silk-imagem" src="silk-compacto.webp" alt="" width="72" height="80"><div class="silk-texto"><p class="silk-contexto">IMPRESILK · VISITAS E MEDIÇÃO</p><h1 class="titulo-inicio">Brief de Medição</h1><p class="sub-inicio">Escolha por onde você entra</p></div></header>' +
     atalho +
     '<div class="portas">' +
     '<button class="porta" data-area="comercial">' +
@@ -5768,7 +5767,7 @@ function renderDashboard(app) {
   const barras = (titulo,grupos) => '<section class="dash-panel"><h2>'+titulo+'</h2>'+(grupos.length ? grupos.map(g => '<div class="dash-bar"><span>'+esc(g.nome)+'</span><meter aria-label="'+esc(g.nome)+'" min="0" max="'+Math.max(...grupos.map(x=>x.total))+'" value="'+g.total+'">'+g.total+'</meter><b>'+g.total+'</b></div>').join('') : '<p class="dash-empty">Nenhum registro neste filtro.</p>')+'</section>';
   const opcoes = (valores,atual) => valores.map(v=>'<option value="'+esc(v)+'"'+(v===atual?' selected':'')+'>'+esc(v)+'</option>').join('');
   app.innerHTML = htmlTopo(layout ? 'Layouts' : 'Briefings') + '<main class="dash-workspace">'+
-    '<header class="dash-hero"><img src="silk-dashboard.webp" alt="Silk, mascote Impresilk" width="64" height="72"><div><small>IMPRESILK · '+(layout?'CRIAÇÃO E PRODUÇÃO':'BRIEFINGS')+'</small><h1>Visão da equipe</h1><p>Volume, tipos e preenchimento dos registros salvos.</p></div></header>'+
+    '<header class="dash-hero silk-faixa" data-tom="azul"><img class="silk-imagem" src="silk-dashboard.webp" alt="Silk, mascote Impresilk" width="64" height="72"><div><small>IMPRESILK · '+(layout?'CRIAÇÃO E PRODUÇÃO':'BRIEFINGS')+'</small><h1>Visão da equipe</h1><p>Volume, tipos e preenchimento dos registros salvos.</p></div></header>'+
     '<nav class="dash-tabs" aria-label="Dashboard">'+[['geral','📊 Visão geral'],['pessoas','👥 Pessoas'],['tipos','🎨 Tipos'],['qualidade','✅ Qualidade']].map(([id,t])=>'<button class="chip '+(DASH.aba===id?'marcado':'')+'" data-dash-aba="'+id+'" aria-pressed="'+(DASH.aba===id)+'">'+t+'</button>').join('')+'</nav>'+
     '<div class="dash-filters"><label>Período<select id="dash-periodo"><option value="">Todo o histórico</option>'+opcoes(periodos,DASH.periodo)+'<option value="sem-data"'+(DASH.periodo==='sem-data'?' selected':'')+'>Sem data registrada</option></select></label><label>Autoria registrada<select id="dash-pessoa"><option value="">Todas as pessoas</option>'+opcoes(pessoas,DASH.pessoa)+'</select></label><button class="botao suave mini" id="dash-reler">↻ Atualizar leitura</button></div>'+
     '<div class="dash-kpis">'+[[n,layout?'📚 Lotes salvos':'📋 Briefings'],[linhas.reduce((s,r)=>s+r.quantidade,0),layout?'🖼 Pranchas nas versões':'📐 Itens'],[porPessoa.filter(p=>p.nome!=='Autoria não registrada').length,'👥 Autores'],[pct(completos,n),'✅ Preenchimento completo']].map(([v,t])=>'<div><span>'+t+'</span><strong>'+v+'</strong></div>').join('')+'</div>'+

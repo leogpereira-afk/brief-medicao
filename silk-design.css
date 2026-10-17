@@ -1,0 +1,19 @@
+/* Design System Impresilk: cabeçalho compacto, sem alterar cores operacionais. */
+.silk-faixa{--silk-tom:#19364f;display:flex;align-items:center;flex-wrap:wrap;gap:16px;padding:18px 22px;border-radius:18px;background:linear-gradient(115deg,var(--silk-tom),#122b40);color:#fff;margin-bottom:18px;box-shadow:0 4px 14px #132c4710;min-width:0}
+.silk-faixa[data-tom="azul"]{--silk-tom:#204a78}
+.silk-faixa[data-tom="petroleo"]{--silk-tom:#164653}
+.silk-faixa[data-tom="ardosia"]{--silk-tom:#303e65}
+.silk-faixa .silk-imagem{display:block;width:72px;height:80px;object-fit:contain;flex:none;pointer-events:none}
+.silk-faixa .silk-texto{flex:1;min-width:0}
+.silk-faixa h1,.silk-faixa h2{color:#fff;margin:0;font-size:clamp(23px,2.3vw,30px);line-height:1.2}
+.silk-faixa p,.silk-faixa .sub,.silk-faixa .muted{color:#e0eaf2;margin:6px 0 0;font-size:14px;line-height:1.5}
+.silk-faixa .silk-contexto{color:#bedcec;font-size:11px;letter-spacing:1.2px;font-weight:650;margin:0 0 5px}
+.silk-faixa .silk-acoes{display:flex;flex-wrap:wrap;align-items:center;gap:8px;max-width:100%}
+.silk-faixa .silk-acoes :is(button,a){min-height:44px;border-radius:10px;background:#ffffff0d;color:#fff;border:1px solid #ffffff70}
+.silk-faixa .silk-acoes :is(.primary,.btn-primario){background:#fff;color:#19364f}
+.silk-faixa :is(button,a,select):focus-visible{outline:3px solid #f5cc5c;outline-offset:3px}
+@media(prefers-reduced-motion:no-preference){.silk-imagem{animation:silk-saudacao .8s ease-out both}@keyframes silk-saudacao{0%{transform:translateY(4px) rotate(-4deg)}50%{transform:translateY(-2px) rotate(2deg)}100%{transform:none}}}
+@media(max-width:640px){.silk-faixa{padding:16px;gap:12px}.silk-faixa .silk-imagem{width:52px;height:60px}.silk-faixa .silk-texto{flex-basis:calc(100% - 70px)}.silk-faixa .silk-acoes{width:100%}}
+@media print{.silk-imagem{display:none!important}.silk-faixa{background:none!important;color:#111!important;box-shadow:none;padding:0;border:0}.silk-faixa :is(h1,h2,p,.muted,.sub){color:#111!important}.silk-acoes{display:none!important}}
+
+.miolo-inicio .silk-faixa{text-align:left}.dash-hero.silk-faixa{background:linear-gradient(115deg,#204a78,#122b40)}.dash-hero.silk-faixa h1{color:#fff}.dash-hero.silk-faixa small{color:#bedcec}
