@@ -644,6 +644,7 @@ function lerRota() {
   const partes = h.split('/');
   if (SISTEMA_LAYOUT) {
     if (!SESSAO || !podeUsarLayout()) { ROTA = { nome: 'login', area: 'layout' }; return; }
+    if (h === 'dashboard') { ROTA = { nome: 'dashboard' }; return; }
     if (h === 'trocar-senha') { ROTA = { nome: 'senha' }; return; }
     ROTA = { nome: 'layout', modo: partes[1] === 'producao' ? 'producao' : 'projeto', id: partes[2] || '' };
     return;
@@ -661,6 +662,7 @@ function lerRota() {
   if (!SESSAO) { ROTA = partes[0] === 'layout' ? { nome: 'login', area: 'layout' } : { nome: 'inicio' }; return; }
   if (h === 'agenda') ROTA = { nome: 'agenda' };
   else if (h === 'lista') ROTA = { nome: 'lista' };
+  else if (h === 'dashboard') ROTA = { nome: 'dashboard' };
   else if (h === 'login') ROTA = { nome: 'login', area: 'comercial' };
   else if (h === 'novo') ROTA = { nome: 'novo' };
   else if (partes[0] === 'editar') ROTA = { nome: 'editor', id: partes[1] };
@@ -706,9 +708,9 @@ function htmlTopo(tituloTela) {
     // saída era o ☰ -- quem usa no celular, que é a maioria, não descobria que
     // existiam Arquivos e Gerador de layout.
     '<nav class="nav-topo" aria-label="Ferramentas do módulo">' +
-    (ROTA.nome === 'layout' ? '' : souMedidor()
-      ? '<a href="#/agenda" class="' + (ROTA.nome === 'agenda' ? 'ativo' : '') + '">📍 Minhas visitas</a>'
-      : '<a href="#/lista" class="' + (ROTA.nome === 'lista' ? 'ativo' : '') + '">📋 Briefings</a>') +
+    (!souMedidor() ? '<a href="' + (SISTEMA_LAYOUT ? 'index.html#/lista' : '#/lista') + '" class="' + (ROTA.nome === 'lista' ? 'ativo' : '') + '">📋 Briefings</a>' : '') +
+    (!souMedidor() ? '<a href="#/dashboard" class="' + (ROTA.nome === 'dashboard' ? 'ativo' : '') + '">📊 Dashboard</a>' : '') +
+    (!SISTEMA_LAYOUT && souMedidor() ? '<a href="#/agenda" class="' + (ROTA.nome === 'agenda' ? 'ativo' : '') + '">📍 Minhas visitas</a>' : '') +
     // Quem não é medidor mas tem visita marcada no nome (vendedor que vai medir,
     // gestão) só descobria isso abrindo briefing por briefing. O atalho aparece
     // sozinho quando existe compromisso, e some quando não existe.
@@ -716,9 +718,9 @@ function htmlTopo(tituloTela) {
       ? '<a href="#/agenda" class="' + (ROTA.nome === 'agenda' ? 'ativo' : '') + '">📍 Minhas visitas' +
         '<span class="marcador-nav">' + contarCompromissos() + '</span></a>'
       : '') +
-    (ROTA.nome !== 'layout' && podeCriar() ? '<a href="#/novo" class="' + (ROTA.nome === 'novo' || ROTA.nome === 'editor' ? 'ativo' : '') + '">➕ Novo</a>' : '') +
+    (!SISTEMA_LAYOUT && ROTA.nome !== 'layout' && podeCriar() ? '<a href="#/novo" class="' + (ROTA.nome === 'novo' || ROTA.nome === 'editor' ? 'ativo' : '') + '">➕ Novo</a>' : '') +
     (!SISTEMA_LAYOUT && podeVerArquivos() ? '<a href="#/arquivos" class="' + (ROTA.nome === 'arquivos' ? 'ativo' : '') + '">🖼 Arquivos</a>' : '') +
-    (ROTA.nome === 'layout' ? '<a href="#/layout/producao" class="' + (ROTA.modo === 'producao' ? 'ativo' : '') + '">Produção</a><a href="#/layout/projeto" class="' + (ROTA.modo === 'projeto' ? 'ativo' : '') + '">Projeto</a>' : '') +
+    ((SISTEMA_LAYOUT || ROTA.nome === 'layout') ? '<a href="#/layout/producao" class="' + (ROTA.modo === 'producao' ? 'ativo' : '') + '">Produção</a><a href="#/layout/projeto" class="' + (ROTA.modo === 'projeto' ? 'ativo' : '') + '">Projeto</a>' : '') +
     (!SISTEMA_LAYOUT && SESSAO && SESSAO.papel === 'admin' ? '<a href="#/admin" class="' + (ROTA.nome === 'admin' ? 'ativo' : '') + '">⚙ Configurações</a>' : '') +
     '</nav>' +
     // O estado da sincronização é BOTÃO, não etiqueta: antes ele só informava, e
@@ -881,6 +883,7 @@ function renderApp() {
   switch (ROTA.nome) {
     case 'inicio': return renderInicio(app);
     case 'layout': return renderLayout(app);
+    case 'dashboard': return souMedidor() ? renderAgenda(app) : renderDashboard(app);
     case 'arquivos': return renderArquivos(app);
     case 'login': return renderLogin(app);
     case 'senha': return renderTrocarSenha(app);
@@ -5713,5 +5716,72 @@ function exportarFichaVisita(b) {
 }
 
 /* ══════════════════ Início ══════════════════ */
+
+
+/* Dashboard: somente registros já salvos e autorizados para a sessão. */
+let DASH = { aba: 'geral', periodo: '', pessoa: '' };
+function registrosDashboard(layout) {
+  if (souMedidor() || (layout && !podeUsarLayout())) return [];
+  const visiveis = visiveisPraSessao();
+  if (!layout) return visiveis;
+  // Avulsas seguem a mesma permissão de Arquivos (admin/designer).
+  return visiveis.concat(STORE.getAllOS().filter(b => b && b.avulsa && !b.apagadoEm));
+}
+function linhasDashboard(registros, layout, cfg) {
+  const data = v => { const d = diaLocal(v); return /^\d{4}-\d{2}-\d{2}$/.test(d) ? d.slice(0,7) : ''; };
+  return registros.flatMap(b => {
+    if (layout) return (b.pranchas || []).map(v => ({
+      id: b.id, cliente: b.cliente || 'Sem cliente', pessoa: String(v.criadoPor || '').trim() || 'Autoria não registrada',
+      periodo: data(v.criadoEm), quantidade: (v.itens || []).length,
+      tipos: (v.itens || []).map(p => p.setor || p.seloServico || 'Tipo não registrado'),
+      completo: (v.itens || []).length > 0 && v.itens.every(p => (p.cliente || p.osNumero) && (p.setor || p.seloServico)),
+      status: v.modo === 'producao' ? 'Produção' : v.modo === 'projeto' ? 'Projeto' : 'Modo não registrado',
+      versao: v.versao, avulsa: !!b.avulsa
+    }));
+    return [{ id: b.id, cliente: b.cliente || 'Sem cliente', pessoa: String(b.criadoPor || '').trim() || 'Autoria não registrada',
+      periodo: data(b.criadoEm || b.dataHora), quantidade: (b.itens || []).length,
+      tipos: [b.tipoMedicao || 'Tipo não registrado'],
+      completo: faltaCliente(b).length === 0 && (b.itens || []).length > 0 && b.itens.every(i => itemCompleto(i,cfg)),
+      status: b.situacao === 'enviado' ? (b.status || 'Enviado') : 'Rascunho' }];
+  });
+}
+function agruparDashboard(linhas, campo) {
+  const mapa = new Map();
+  linhas.forEach(r => (Array.isArray(r[campo]) ? r[campo] : [r[campo]]).forEach(k => {
+    const a = mapa.get(k) || { nome:k, total:0, completos:0, quantidade:0 };
+    a.total++; a.completos += r.completo ? 1 : 0; a.quantidade += r.quantidade; mapa.set(k,a);
+  }));
+  return [...mapa.values()].sort((a,b) => b.total-a.total || a.nome.localeCompare(b.nome,'pt-BR'));
+}
+function renderDashboard(app) {
+  const layout = SISTEMA_LAYOUT;
+  const todas = linhasDashboard(registrosDashboard(layout),layout,STORE.getCFG());
+  const periodos = [...new Set(todas.map(r => r.periodo).filter(Boolean))].sort().reverse();
+  const pessoas = [...new Set(todas.map(r => r.pessoa))].sort((a,b)=>a.localeCompare(b,'pt-BR'));
+  const linhas = todas.filter(r => (!DASH.periodo || (DASH.periodo === 'sem-data' ? !r.periodo : r.periodo === DASH.periodo)) && (!DASH.pessoa || r.pessoa === DASH.pessoa));
+  const n = linhas.length, completos = linhas.filter(r=>r.completo).length;
+  const porPessoa = agruparDashboard(linhas,'pessoa');
+  if (DASH.aba === 'qualidade') porPessoa.sort((a,b) => b.completos/b.total - a.completos/a.total || b.total-a.total);
+  const porTipo = agruparDashboard(linhas,'tipos');
+  const pct = (a,b) => b ? Math.round(a/b*100)+'%' : '—';
+  const unidade = layout ? 'lotes salvos' : 'briefings';
+  const barras = (titulo,grupos) => '<section class="dash-panel"><h2>'+titulo+'</h2>'+(grupos.length ? grupos.map(g => '<div class="dash-bar"><span>'+esc(g.nome)+'</span><meter aria-label="'+esc(g.nome)+'" min="0" max="'+Math.max(...grupos.map(x=>x.total))+'" value="'+g.total+'">'+g.total+'</meter><b>'+g.total+'</b></div>').join('') : '<p class="dash-empty">Nenhum registro neste filtro.</p>')+'</section>';
+  const opcoes = (valores,atual) => valores.map(v=>'<option value="'+esc(v)+'"'+(v===atual?' selected':'')+'>'+esc(v)+'</option>').join('');
+  app.innerHTML = htmlTopo(layout ? 'Layouts' : 'Briefings') + '<main class="dash-workspace">'+
+    '<header class="dash-hero"><img src="silk-dashboard.webp" alt="Silk, mascote Impresilk" width="64" height="72"><div><small>IMPRESILK · '+(layout?'CRIAÇÃO E PRODUÇÃO':'BRIEFINGS')+'</small><h1>Visão da equipe</h1><p>Volume, tipos e preenchimento dos registros salvos.</p></div></header>'+
+    '<nav class="dash-tabs" aria-label="Dashboard">'+[['geral','📊 Visão geral'],['pessoas','👥 Pessoas'],['tipos','🎨 Tipos'],['qualidade','✅ Qualidade']].map(([id,t])=>'<button class="chip '+(DASH.aba===id?'marcado':'')+'" data-dash-aba="'+id+'" aria-pressed="'+(DASH.aba===id)+'">'+t+'</button>').join('')+'</nav>'+
+    '<div class="dash-filters"><label>Período<select id="dash-periodo"><option value="">Todo o histórico</option>'+opcoes(periodos,DASH.periodo)+'<option value="sem-data"'+(DASH.periodo==='sem-data'?' selected':'')+'>Sem data registrada</option></select></label><label>Autoria registrada<select id="dash-pessoa"><option value="">Todas as pessoas</option>'+opcoes(pessoas,DASH.pessoa)+'</select></label><button class="botao suave mini" id="dash-reler">↻ Atualizar leitura</button></div>'+
+    '<div class="dash-kpis">'+[[n,layout?'📚 Lotes salvos':'📋 Briefings'],[linhas.reduce((s,r)=>s+r.quantidade,0),layout?'🖼 Pranchas nas versões':'📐 Itens'],[porPessoa.filter(p=>p.nome!=='Autoria não registrada').length,'👥 Autores'],[pct(completos,n),'✅ Preenchimento completo']].map(([v,t])=>'<div><span>'+t+'</span><strong>'+v+'</strong></div>').join('')+'</div>'+
+    '<p class="dash-note">'+(layout?'Cada salvamento é um lote: revisões contam separadamente. Só inclui pranchas persistidas, não downloads sem salvamento.':'Briefings por data de criação, incluindo rascunhos e finalizados visíveis ao seu perfil.')+'</p>'+
+    (DASH.aba==='geral' ? '<div class="dash-grid">'+barras('👥 '+unidade+' por autoria',porPessoa)+barras('📍 Situação registrada',agruparDashboard(linhas,'status'))+'</div>' : '')+
+    (DASH.aba==='tipos' ? barras('🎨 '+(layout?'Pranchas por setor / tipo':'Briefings por tipo de medição'),porTipo) : '')+
+    (DASH.aba==='pessoas' || DASH.aba==='qualidade' ? '<section class="dash-panel"><h2>'+(DASH.aba==='pessoas'?'👥 Produção por autoria':'✅ Completude por autoria')+'</h2><div class="dash-table"><table><thead><tr><th>Pessoa</th><th>'+unidade+'</th><th>'+(layout?'Pranchas':'Itens')+'</th><th>Completos</th><th>%</th></tr></thead><tbody>'+porPessoa.map(p=>'<tr><td>'+esc(p.nome)+'</td><td>'+p.total+'</td><td>'+p.quantidade+'</td><td>'+p.completos+' / '+p.total+'</td><td>'+pct(p.completos,p.total)+'</td></tr>').join('')+'</tbody></table></div>'+(!n?'<p>Nenhum registro neste filtro.</p>':'')+'</section>' : '')+
+    '<details class="dash-panel dash-criteria"><summary>ℹ️ Critérios e limites dos indicadores</summary><p>'+(layout?'Completo = lote com ao menos uma prancha; cada prancha deve ter cliente ou O.S. e setor ou selo. Isso não valida o conteúdo visual nem a disponibilidade do arquivo.':'Completo = cliente, telefone, tipo de medição, ao menos um item e todos os itens com nome, medida válida e fotos obrigatórias da configuração atual.')+' Completude não é avaliação técnica. Não há nota de aprovação ou retrabalho presumida. Autoria usa o nome gravado na criação; nomes iguais ficam agrupados, sem comprovar identidade individual.</p><p>Registros sem data: '+todas.filter(r=>!r.periodo).length+'. Dados da cópia disponível neste aparelho; consulte o estado de sincronização no topo.</p></details></main>';
+  ligarTopo();
+  $$('[data-dash-aba]').forEach(b=>b.onclick=()=>{DASH.aba=b.dataset.dashAba;renderDashboard(app);});
+  $('#dash-periodo').onchange=e=>{DASH.periodo=e.target.value;renderDashboard(app);};
+  $('#dash-pessoa').onchange=e=>{DASH.pessoa=e.target.value;renderDashboard(app);};
+  $('#dash-reler').onclick=()=>renderDashboard(app);
+}
 
 boot();
