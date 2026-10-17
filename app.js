@@ -496,24 +496,30 @@ window.addEventListener('beforeunload', e => { if (rascunhoProducao() || rascunh
 
 window.addEventListener('hashchange', () => { lerRota(); renderApp(); });
 
+const URL_PAINEL = 'https://leogpereira-afk.github.io/painel-impresilk/';
 function renderAcessoPainel(app) {
+  // Como Compras/DRE: o crachá do Painel é aproveitado automaticamente.
+  // Sem crachá não há uma segunda porta de login nem um botão de validação.
+  if (!AUTH.temCracha() || ['painel','expirada'].includes(ACESSO_PAINEL)) {
+    location.replace(URL_PAINEL);
+    return;
+  }
   const nome = SISTEMA_LAYOUT ? 'Layout' : 'Brief de Medição';
-  const mensagem = ACESSO_PAINEL === 'verificando' ? 'Validando seu acesso pelo Painel…'
-    : ACESSO_PAINEL === 'indisponivel' ? 'Não foi possível validar o acesso. Confira a conexão e tente novamente.'
-    : ACESSO_PAINEL === 'sem-acesso' || (SESSAO && SISTEMA_LAYOUT && !podeUsarLayout()) ? 'Seu perfil não tem acesso a esta área. A liberação é feita no Painel.'
-    : 'Acesse pelo Painel de Gestão com sua conta da equipe.';
-  document.title = nome + ' · Acesso pelo Painel';
-  app.innerHTML = '<main class="tela-login"><div class="cartao-login"><img class="logo" src="logo-impresilk.png" alt="Impresilk">' +
-    '<h1>' + nome + '</h1><p role="status">' + mensagem + '</p>' +
-    '<a class="botao largo" href="https://leogpereira-afk.github.io/painel-impresilk/">Abrir Painel de Gestão</a>' +
-    (ACESSO_PAINEL !== 'verificando' ? '<button class="botao largo suave" id="validar-acesso">Validar acesso novamente</button>' : '') + '</div></main>';
-  const tentar = $('#validar-acesso'); if (tentar) tentar.onclick = () => location.reload();
+  const semAcesso = ACESSO_PAINEL === 'sem-acesso' || (SESSAO && SISTEMA_LAYOUT && !podeUsarLayout());
+  document.title = nome + ' · Impresilk';
+  app.innerHTML = '<main class="miolo" role="status"><h1>' + nome + '</h1><p>' +
+    (semAcesso ? 'Seu perfil não possui permissão para esta área.'
+      : ACESSO_PAINEL === 'indisponivel' ? 'Não foi possível carregar sua sessão. Confira a conexão e atualize a página.'
+      : 'Carregando…') + '</p>' +
+    (semAcesso ? '<a class="botao" href="' + URL_PAINEL + '">Voltar ao Painel</a>' : '') + '</main>';
 }
 window.addEventListener('storage', e => {
   if (e.key !== 'app_sync_cracha' && e.key !== null) return;
-  SESSAO = null; ACESSO_PAINEL = 'painel';
+  // A mesma troca de sessão usada em Compras: nunca continuar com a pessoa anterior.
+  SESSAO = null;
   $('#overlays').innerHTML = '';
-  renderAcessoPainel($('#app'));
+  if (AUTH.temCracha()) location.reload();
+  else location.replace(URL_PAINEL);
 });
 
 async function boot() {

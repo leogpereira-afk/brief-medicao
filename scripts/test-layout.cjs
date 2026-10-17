@@ -31,3 +31,8 @@ assert.ok(!layoutHeader.includes('href="#/lista"'));
 assert.ok(!layoutHeader.includes('modulos-brief'));
 assert.ok(!vm.runInContext("htmlTopo('Brief')",brief).includes('href="#/layout'));
 console.log('20 verificações aprovadas: entradas separadas, rotas antigas, permissões e rascunhos.');
+// Ausência de sessão encaminha automaticamente; nunca oferece validação manual.
+vm.runInContext("var AUTH={temCracha:()=>false};ACESSO_PAINEL='painel';renderAcessoPainel({innerHTML:''})",brief);
+assert.equal(legacyLocation.redirect,'https://leogpereira-afk.github.io/painel-impresilk/');
+assert.ok(!source.includes('id="validar-acesso"'));
+console.log('Entrada sem sessão: redirecionamento automático e ausência do botão confirmados.');
