@@ -48,10 +48,36 @@ const AUTH = (() => {
       return r;
     },
 
+    // O Painel grava o crachá; a identidade vem da validação no servidor.
+    async restaurarSessaoPainel() {
+      const token = pegar();
+      const anterior = STORE.getUser();
+      if (!token) { STORE.setUser(null); return { estado: 'painel' }; }
+      const digest = await crypto.subtle.digest('SHA-256', new TextEncoder().encode(token));
+      const marca = Array.from(new Uint8Array(digest), x => x.toString(16).padStart(2, '0')).join('');
+      const r = await this.eu();
+      // Não aplicar resposta de um token anterior após logout/troca no Painel.
+      if (pegar() !== token) return { estado: 'painel' };
+      if (r === false) { esquecer(); STORE.setUser(null); return { estado: 'expirada' }; }
+      if (r === null) {
+        if (anterior?._painelMarca === marca && anterior._painelExp > Date.now() / 1000)
+          return { estado: 'offline', usuario: anterior };
+        return { estado: 'indisponivel' };
+      }
+      if (r.sistema !== 'brief' || !r.usuario || !['admin','designer','vendedor','medidor'].includes(r.papel)) {
+        STORE.setUser(null); return { estado: 'sem-acesso' };
+      }
+      const usuario = { usuario: r.usuario, nome: r.nome || r.usuario, papel: r.papel,
+        trocarSenha: r.trocarSenha === true || (anterior?.usuario === r.usuario && anterior.trocarSenha === true),
+        _painelMarca: marca, _painelExp: r.exp };
+      STORE.setUser(usuario);
+      return { estado: 'ok', usuario };
+    },
+
     // Confere o crachá com o servidor. Sem internet devolve null — e quem chama
     // decide seguir com o que já está no aparelho (é o caso do campo).
     async eu() {
-      try { return await chamar('eu', {}, true); } catch (e) { return e.status === 401 ? false : null; }
+      try { return await chamar('eu', {}, true); } catch (e) { return (e.status === 401 || e.status === 403) ? false : null; }
     },
 
     trocarMinhaSenha(senhaAtual, novaSenha) {

@@ -314,6 +314,7 @@ function abrirManual(aba) {
 /* ══════════════════ Sessão e boot ══════════════════ */
 
 let SESSAO = STORE.getUser();
+let ACESSO_PAINEL = 'verificando';
 let ROTA = { nome: 'lista' };
 let BRIEF = null;         // briefing aberto no editor
 let ETAPA = 1;            // etapa ativa no wizard (mobile)
@@ -495,7 +496,38 @@ window.addEventListener('beforeunload', e => { if (rascunhoProducao() || rascunh
 
 window.addEventListener('hashchange', () => { lerRota(); renderApp(); });
 
+function renderAcessoPainel(app) {
+  const nome = SISTEMA_LAYOUT ? 'Layout' : 'Brief de Medição';
+  const mensagem = ACESSO_PAINEL === 'verificando' ? 'Validando seu acesso pelo Painel…'
+    : ACESSO_PAINEL === 'indisponivel' ? 'Não foi possível validar o acesso. Confira a conexão e tente novamente.'
+    : ACESSO_PAINEL === 'sem-acesso' || (SESSAO && SISTEMA_LAYOUT && !podeUsarLayout()) ? 'Seu perfil não tem acesso a esta área. A liberação é feita no Painel.'
+    : 'Acesse pelo Painel de Gestão com sua conta da equipe.';
+  document.title = nome + ' · Acesso pelo Painel';
+  app.innerHTML = '<main class="tela-login"><div class="cartao-login"><img class="logo" src="logo-impresilk.png" alt="Impresilk">' +
+    '<h1>' + nome + '</h1><p role="status">' + mensagem + '</p>' +
+    '<a class="botao largo" href="https://leogpereira-afk.github.io/painel-impresilk/">Abrir Painel de Gestão</a>' +
+    (ACESSO_PAINEL !== 'verificando' ? '<button class="botao largo suave" id="validar-acesso">Validar acesso novamente</button>' : '') + '</div></main>';
+  const tentar = $('#validar-acesso'); if (tentar) tentar.onclick = () => location.reload();
+}
+window.addEventListener('storage', e => {
+  if (e.key !== 'app_sync_cracha' && e.key !== null) return;
+  SESSAO = null; ACESSO_PAINEL = 'painel';
+  $('#overlays').innerHTML = '';
+  renderAcessoPainel($('#app'));
+});
+
 async function boot() {
+  SESSAO = null;
+  renderAcessoPainel($('#app'));
+  let acesso;
+  try { acesso = await AUTH.restaurarSessaoPainel(); }
+  catch { acesso = { estado: 'indisponivel' }; }
+  ACESSO_PAINEL = acesso.estado;
+  SESSAO = acesso.usuario || null;
+  if (!SESSAO || (SISTEMA_LAYOUT && !podeUsarLayout())) {
+    if (SESSAO) ACESSO_PAINEL = 'sem-acesso';
+    renderAcessoPainel($('#app')); return;
+  }
   if ('serviceWorker' in navigator) { try { navigator.serviceWorker.register('sw.js'); } catch {} }
   // Já logado neste aparelho: vai direto pra área do perfil. Antes, toda
   // abertura caía em "Escolha por onde você entra" e exigia mais um toque --
@@ -521,7 +553,7 @@ async function boot() {
   // Sincronização de fundo: só com o app À VISTA (não gasta bateria/dados em
   // segundo plano) e sempre reenviando a fila junto (item preso não fica parado).
   setInterval(() => {
-    if (document.visibilityState && document.visibilityState !== 'visible') return;
+    if (!SESSAO || (document.visibilityState && document.visibilityState !== 'visible')) return;
     // A config vem junto: é o que revoga o acesso de quem foi desligado sem
     // depender da pessoa fechar e reabrir o app.
     STORE.pullCFG().then(ok => ok && conferirAcesso());
@@ -531,7 +563,7 @@ async function boot() {
   // Voltar pro app (destravar a tela, trocar de aba) sincroniza na hora, em vez
   // de esperar até 60s -- é quando o vendedor mais quer ver o estado fresco.
   document.addEventListener('visibilitychange', () => {
-    if (document.visibilityState === 'visible') { STORE.pull(atualizarPorSync); STORE.trySync(); }
+    if (SESSAO && document.visibilityState === 'visible') { STORE.pull(atualizarPorSync); STORE.trySync(); }
   });
 }
 
@@ -830,7 +862,8 @@ function sairDaConta() {
 function renderApp() {
   const app = $('#app');
   flushSalvar(); // nunca redesenhar por cima de digitação ainda não gravada
-  if (!SESSAO && ROTA.nome !== 'login' && ROTA.nome !== 'inicio') { location.hash = '#/'; return; }
+  if (!SESSAO || (SISTEMA_LAYOUT && !podeUsarLayout())) return renderAcessoPainel(app);
+  if (['login', 'inicio'].includes(ROTA.nome)) ROTA = SISTEMA_LAYOUT ? { nome:'layout', modo:'projeto' } : { nome:'lista' };
   // Senha temporária é obrigação, não sugestão: fechar e reabrir o app não pode
   // servir de desvio. A trava mora aqui, não no redirecionamento do login.
   if (SESSAO && SESSAO.trocarSenha && ROTA.nome !== 'senha') { location.hash = '#/trocar-senha'; return; }
